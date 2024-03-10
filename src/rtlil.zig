@@ -9,6 +9,7 @@ pub const Module = struct {
     wires: []const Wire,
     connections: []const Connection,
     cells: []const Cell,
+    processes: []const Process,
 
     fn print(self: Self, writer: *Writer) !void {
         try writer.printAttributes(self);
@@ -27,6 +28,9 @@ pub const Module = struct {
 
         for (self.cells) |cell|
             try cell.print(writer);
+
+        for (self.processes) |process|
+            try process.print(writer);
 
         writer.indent -= 1;
         try writer.print("end", .{});
@@ -145,23 +149,38 @@ pub const Connection = struct {
     const Self = @This();
 
     name: []const u8,
-    target: union(enum) {
-        wire: struct {
-            name: []const u8,
-            range: Range,
-        },
-        constant: Bitvector,
-
-        pub fn format(self: @This(), comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-            switch (self) {
-                .wire => |wire| try std.fmt.format(writer, "{s} [{}]", .{ wire.name, wire.range }),
-                .constant => |bv| try bv.format(fmt, options, writer),
-            }
-        }
-    },
+    target: RValue,
 
     pub fn print(self: Self, writer: *Writer) !void {
         try writer.print("connect {s} {}", .{ self.name, self.target });
+    }
+};
+
+pub const RValue = union(enum) {
+    const Self = @This();
+
+    signal: Signal,
+    constant: Bitvector,
+    cat: Cat,
+
+    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        switch (self) {
+            inline else => |payload| try payload.format(fmt, options, writer),
+        }
+    }
+};
+
+pub const Signal = struct {
+    const Self = @This();
+
+    name: []const u8,
+    range: Range = .{},
+
+    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = fmt;
+        _ = options;
+
+        try std.fmt.format(writer, "{s} [{}]", .{ self.name, self.range });
     }
 };
 
@@ -175,17 +194,34 @@ pub const Bitvector = struct {
         _ = options;
 
         try std.fmt.format(writer, "{}'", .{self.bits.len});
-        for (self.bits) |bit| {
+        var it = std.mem.reverseIterator(self.bits);
+        while (it.next()) |bit| {
             try writer.writeByte(if (bit == 1) '1' else '0');
         }
+    }
+};
+
+pub const Cat = struct {
+    const Self = @This();
+
+    values: []const RValue,
+
+    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) anyerror!void {
+        // XXX: anyerror
+        try writer.writeAll("{ ");
+        for (self.values) |value| {
+            try value.format(fmt, options, writer);
+            try writer.writeByte(' ');
+        }
+        try writer.writeByte('}');
     }
 };
 
 pub const Range = struct {
     const Self = @This();
 
-    upper: usize,
-    lower: usize,
+    upper: usize = 0,
+    lower: usize = 0,
 
     pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = fmt;
@@ -197,6 +233,81 @@ pub const Range = struct {
             try std.fmt.format(writer, "{}:{}", .{ self.upper, self.lower });
         }
     }
+};
+
+pub const Process = struct {
+    const Self = @This();
+
+    attributes: []Attribute = &.{},
+    name: []const u8,
+    assigns: []const Assign = &.{},
+    switches: []const Switch,
+
+    pub fn print(self: Self, writer: *Writer) !void {
+        try writer.printAttributes(self);
+
+        try writer.print("process {s}", .{self.name});
+        writer.indent += 1;
+
+        for (self.assigns) |assign|
+            try assign.print(writer);
+
+        for (self.switches) |switch_|
+            try switch_.print(writer);
+
+        writer.indent -= 1;
+        try writer.print("end", .{});
+    }
+};
+
+pub const Assign = struct {
+    const Self = @This();
+
+    lhs: Signal,
+    rhs: RValue,
+
+    pub fn print(self: Self, writer: *Writer) !void {
+        try writer.print("assign {} {}", .{ self.lhs, self.rhs });
+    }
+};
+
+pub const Switch = struct {
+    const Self = @This();
+
+    lhs: Signal,
+    cases: []const Case,
+
+    pub fn print(self: Self, writer: *Writer) !void {
+        try writer.print("switch {}", .{self.lhs});
+        writer.indent += 1;
+
+        for (self.cases) |case|
+            try case.print(writer);
+
+        writer.indent -= 1;
+        try writer.print("end", .{});
+    }
+
+    pub const Case = struct {
+        value: ?Bitvector,
+        assigns: []const Assign = &.{},
+        switches: []const Switch = &.{},
+
+        pub fn print(self: Case, writer: *Writer) anyerror!void {
+            // XXX: anyerror.e
+            if (self.value) |value| {
+                try writer.print("case {}", .{value});
+            } else {
+                try writer.print("case", .{});
+            }
+            writer.indent += 1;
+            for (self.assigns) |assign|
+                try assign.print(writer);
+            for (self.switches) |switch_|
+                try switch_.print(writer);
+            writer.indent -= 1;
+        }
+    };
 };
 
 pub fn output(writer: anytype, mods: []const Module) !void {
@@ -421,7 +532,7 @@ test "module print" {
             .{ .width = 1, .spec = .{ .dir = .inout, .index = 0 }, .name = "\\led_0__io" },
         },
         .connections = &.{.{ .name = "\\i2c_bus__busy", .target = .{
-            .wire = .{ .name = "\\led_0__o", .range = .{ .upper = 0, .lower = 0 } },
+            .signal = .{ .name = "\\led_0__o" },
         } }},
         .cells = &.{.{
             .attributes = &.{
@@ -434,19 +545,66 @@ test "module print" {
                 .{ .name = "\\CLK_POLARITY", .value = .{ .number = 1 } },
             },
             .connections = &.{
-                .{ .name = "\\D", .target = .{ .wire = .{
+                .{ .name = "\\D", .target = .{ .signal = .{
                     .name = "$8",
-                    .range = .{ .upper = 0, .lower = 0 },
                 } } },
-                .{ .name = "\\CLK", .target = .{ .wire = .{
+                .{ .name = "\\CLK", .target = .{ .signal = .{
                     .name = "\\clk",
-                    .range = .{ .upper = 0, .lower = 0 },
                 } } },
-                .{ .name = "\\Q", .target = .{ .wire = .{
+                .{ .name = "\\Q", .target = .{ .signal = .{
                     .name = "\\w_en",
-                    .range = .{ .upper = 0, .lower = 0 },
                 } } },
             },
+        }},
+        .processes = &.{.{
+            .name = "$30",
+            .assigns = &.{.{
+                .lhs = .{ .name = "$8" },
+                .rhs = .{ .signal = .{ .name = "\\w_en" } },
+            }},
+            .switches = &.{ .{
+                .lhs = .{ .name = "\\fsm_state", .range = .{ .upper = 1 } },
+                .cases = &.{
+                    .{
+                        .value = .{ .bits = &.{ 0, 0 } },
+                        .assigns = &.{
+                            .{ .lhs = .{ .name = "$8" }, .rhs = .{ .constant = .{ .bits = &.{0} } } },
+                        },
+                    },
+                    .{ .value = .{ .bits = &.{ 1, 0 } } },
+                    .{
+                        .value = .{ .bits = &.{ 0, 1 } },
+                        .switches = &.{.{
+                            .lhs = .{ .name = "\\w_rdy" },
+                            .cases = &.{.{
+                                .value = .{ .bits = &.{1} },
+                                .assigns = &.{.{
+                                    .lhs = .{ .name = "$8" },
+                                    .rhs = .{ .constant = .{ .bits = &.{1} } },
+                                }},
+                            }},
+                        }},
+                    },
+                    .{ .value = .{ .bits = &.{ 1, 1 } }, .assigns = &.{
+                        .{ .lhs = .{ .name = "$8" }, .rhs = .{ .constant = .{ .bits = &.{0} } } },
+                    } },
+                },
+            }, .{
+                .lhs = .{ .name = "\\rst" },
+                .cases = &.{
+                    .{
+                        .value = .{ .bits = &.{1} },
+                        .assigns = &.{.{
+                            .lhs = .{ .name = "$8" },
+                            .rhs = .{ .cat = .{ .values = &.{
+                                .{ .constant = .{ .bits = &.{ 0, 0, 0, 0 } } },
+                                .{ .signal = .{ .name = "\\read__value", .range = .{ .upper = 15, .lower = 15 } } },
+                            } } },
+                        }},
+                    },
+                    .{ .value = null },
+                },
+            } },
         }},
     },
         \\attribute \generator "eri"
@@ -465,6 +623,26 @@ test "module print" {
         \\    connect \CLK \clk [0]
         \\    connect \Q \w_en [0]
         \\  end
+        \\  process $30
+        \\    assign $8 [0] \w_en [0]
+        \\    switch \fsm_state [1:0]
+        \\      case 2'00
+        \\        assign $8 [0] 1'0
+        \\      case 2'01
+        \\      case 2'10
+        \\        switch \w_rdy [0]
+        \\          case 1'1
+        \\            assign $8 [0] 1'1
+        \\        end
+        \\      case 2'11
+        \\        assign $8 [0] 1'0
+        \\    end
+        \\    switch \rst [0]
+        \\      case 1'1
+        \\        assign $8 [0] { 4'0000 \read__value [15] }
+        \\      case
+        \\    end
+        \\  end
         \\end
         \\
     );
@@ -479,9 +657,9 @@ test "cell print" {
             .{ .name = "\\WIDTH", .value = .{ .number = 8 } },
             .{ .name = "\\ABITS", .value = .{ .number = 5 } },
         },
-        .connections = &.{ .{ .name = "\\ADDR", .target = .{ .wire = .{
+        .connections = &.{ .{ .name = "\\ADDR", .target = .{ .signal = .{
             .name = "$signature__addr$18",
-            .range = .{ .upper = 4, .lower = 0 },
+            .range = .{ .upper = 4 },
         } } }, .{ .name = "\\ARST", .target = .{ .constant = .{
             .bits = &.{0},
         } } } },
