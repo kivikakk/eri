@@ -1,6 +1,37 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+pub const Loc = struct {
+    const Self = @This();
+
+    line: usize = 1,
+    column: usize = 0,
+
+    fn mk(line: usize, column: usize) Self {
+        return Self{ .line = line, .column = column };
+    }
+
+    fn left(self: Self) Self {
+        std.debug.assert(self.column > 0);
+        return .{ .line = self.line, .column = self.column - 1 };
+    }
+
+    fn right(self: Self) Self {
+        return .{ .line = self.line, .column = self.column + 1 };
+    }
+
+    fn down(self: Self) Self {
+        return .{ .line = self.line + 1, .column = 0 };
+    }
+
+    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = fmt;
+        _ = options;
+
+        try std.fmt.format(writer, "{}:{}", .{ self.line, self.column });
+    }
+};
+
 pub fn parse(allocator: Allocator, input: []const u8) !Doc {
     const tokens = try Token.allFromBuffer(allocator, input);
     defer {
@@ -43,9 +74,11 @@ test "parse" {
     try expectRoundtrip("(abc (def))");
     try expectRoundtrip("   123  8 \n\t  x");
     try expectRoundtrip("((((((((((((((((((((((()))))))))))))))))))))))");
+    try expectRoundtrip(
+        \\ (x ; ... yeah )
+        \\  y)
+    );
 }
-
-pub const Loc = usize;
 
 pub const Doc = struct {
     const Self = @This();
@@ -90,10 +123,12 @@ pub const Form = struct {
     start: Loc,
     end: Loc,
 
-    fn nextFromTokens(allocator: Allocator, tokens: []const Token) Error!struct {
+    const NextResult = struct {
         form: Self,
         consumed: usize,
-    } {
+    };
+
+    fn nextFromTokens(allocator: Allocator, tokens: []const Token) Error!NextResult {
         var state: union(enum) {
             initial,
             list: struct {
@@ -134,9 +169,9 @@ pub const Form = struct {
                 .list => |*list_state| switch (token.value) {
                     .pclose => break Self.mk(.{ .list = try list_state.forms.toOwnedSlice() }, list_state.start, token.end),
                     else => {
-                        const fc = try Self.nextFromTokens(allocator, tokens[i..]);
-                        try list_state.forms.append(fc.form);
-                        skip = fc.consumed - 1;
+                        const next_result = try Self.nextFromTokens(allocator, tokens[i..]);
+                        try list_state.forms.append(next_result.form);
+                        skip = next_result.consumed - 1;
                     },
                 },
             }
@@ -158,9 +193,9 @@ pub const Form = struct {
         }
 
         while (offset < tokens.len) {
-            const fc = try Self.nextFromTokens(allocator, tokens[offset..]);
-            try forms.append(fc.form);
-            offset += fc.consumed;
+            const next_result = try Self.nextFromTokens(allocator, tokens[offset..]);
+            try forms.append(next_result.form);
+            offset += next_result.consumed;
         }
 
         return try forms.toOwnedSlice();
@@ -185,7 +220,7 @@ pub const Form = struct {
                     try form.format(fmt, options, writer);
                 }
                 try writer.writeByte(')');
-            }
+            },
         }
     }
 
@@ -214,31 +249,31 @@ fn expectNextFromTokens(
         std.testing.allocator.free(tokens);
     }
 
-    const fce = Form.nextFromTokens(std.testing.allocator, tokens);
+    const form_err = Form.nextFromTokens(std.testing.allocator, tokens);
     defer {
-        if (fce) |fc| fc.form.deinit(std.testing.allocator) else |_| {}
+        if (form_err) |next_result| next_result.form.deinit(std.testing.allocator) else |_| {}
     }
 
     if (expectedForm) |expForm| {
-        const fc = try fce;
-        try std.testing.expectEqualDeep(expForm, fc.form);
-        try std.testing.expectEqual(expectedConsumed, fc.consumed);
+        const next_result = try form_err;
+        try std.testing.expectEqualDeep(expForm, next_result.form);
+        try std.testing.expectEqual(expectedConsumed, next_result.consumed);
     } else |expErr| {
-        try std.testing.expectError(expErr, fce);
+        try std.testing.expectError(expErr, form_err);
     }
 }
 
 test "Form.nextFromTokens" {
-    try expectNextFromTokens(Form.mk(.{ .number = 123 }, 0, 2), 1, "123");
-    try expectNextFromTokens(Form.mk(.{ .label = "aroo" }, 1, 4), 1, " aroo ");
-    try expectNextFromTokens(Form.mk(.{ .list = &.{} }, 1, 2), 2, " () ");
+    try expectNextFromTokens(Form.mk(.{ .number = 123 }, Loc.mk(1, 0), Loc.mk(1, 2)), 1, "123");
+    try expectNextFromTokens(Form.mk(.{ .label = "aroo" }, Loc.mk(1, 1), Loc.mk(1, 4)), 1, " aroo ");
+    try expectNextFromTokens(Form.mk(.{ .list = &.{} }, Loc.mk(1, 1), Loc.mk(1, 2)), 2, " () ");
     try expectNextFromTokens(Form.mk(.{ .list = &.{
-        Form.mk(.{ .label = "uwah" }, 1, 4),
-    } }, 0, 5), 3, "(uwah)");
+        Form.mk(.{ .label = "uwah" }, Loc.mk(1, 1), Loc.mk(1, 4)),
+    } }, Loc.mk(1, 0), Loc.mk(1, 5)), 3, "(uwah)");
     try expectNextFromTokens(Form.mk(.{ .list = &.{
-        Form.mk(.{ .label = "awa" }, 1, 3),
-        Form.mk(.{ .list = &.{Form.mk(.{ .number = 123456 }, 6, 11)} }, 5, 12),
-    } }, 0, 13), 6, "(awa (123456))");
+        Form.mk(.{ .label = "awa" }, Loc.mk(1, 1), Loc.mk(1, 3)),
+        Form.mk(.{ .list = &.{Form.mk(.{ .number = 123456 }, Loc.mk(1, 6), Loc.mk(1, 11))} }, Loc.mk(1, 5), Loc.mk(1, 12)),
+    } }, Loc.mk(1, 0), Loc.mk(1, 13)), 6, "(awa (123456))");
     try expectNextFromTokens(error.Unexpected, 0, "(awa");
     try expectNextFromTokens(error.Unexpected, 0, ")");
 }
@@ -266,8 +301,8 @@ fn expectAllFromTokens(
 
 test "Form.allFromTokens" {
     try expectAllFromTokens(&.{
-        Form.mk(.{ .number = 123 }, 0, 2),
-        Form.mk(.{ .number = 456 }, 4, 6),
+        Form.mk(.{ .number = 123 }, Loc.mk(1, 0), Loc.mk(1, 2)),
+        Form.mk(.{ .number = 456 }, Loc.mk(1, 4), Loc.mk(1, 6)),
     }, "123 456");
     try expectAllFromTokens(&.{}, "   ");
 }
@@ -291,8 +326,8 @@ const Token = struct {
             _ = options;
 
             switch (self) {
-                .number => |n| try std.fmt.format(writer, "{}", .{n}),
-                .label => |l| try writer.writeAll(l),
+                .number => |n| try std.fmt.format(writer, "number {}", .{n}),
+                .label => |l| try std.fmt.format(writer, "label {s}", .{l}),
                 .popen => try writer.writeAll("popen"),
                 .pclose => try writer.writeAll("pclose"),
             }
@@ -304,43 +339,85 @@ const Token = struct {
     start: Loc,
     end: Loc,
 
-    fn nextFromBuffer(allocator: Allocator, buffer: []const u8, offset: usize) Error!Self {
+    const NextResult = struct {
+        token: Self,
+        next_offset: usize,
+        next_loc: Loc,
+    };
+
+    fn nextFromBuffer(allocator: Allocator, buffer: []const u8, offset: usize, start_loc: Loc) Error!NextResult {
         var state: union(enum) {
             initial,
-            number: usize,
-            label: usize,
+            number: struct { usize, Loc },
+            label: struct { usize, Loc },
+            comment,
         } = .initial;
+        var loc = start_loc;
 
         for (buffer[offset..], offset..) |c, i| {
             switch (state) {
                 .initial => switch (c) {
                     ' ', '\r', '\n', '\t' => {},
-                    '0'...'9' => state = .{ .number = i },
-                    'a'...'z', 'A'...'Z' => state = .{ .label = i },
-                    '(' => return Self.mk(.popen, i, i),
-                    ')' => return Self.mk(.pclose, i, i),
+                    '0'...'9' => state = .{ .number = .{ i, loc } },
+                    'a'...'z', 'A'...'Z' => state = .{ .label = .{ i, loc } },
+                    '(' => return Self.mkResult(.popen, loc, loc, i + 1, loc.right()),
+                    ')' => return Self.mkResult(.pclose, loc, loc, i + 1, loc.right()),
+                    ';' => state = .comment,
                     else => return error.Invalid,
                 },
                 .number => |s| switch (c) {
                     '0'...'9' => {},
-                    else => return try Self.mkNumber(buffer, s, i - 1),
+                    else => return try Self.mkNumber(
+                        buffer[s[0]..i],
+                        s[1],
+                        loc.left(),
+                        i,
+                        loc,
+                    ),
                 },
                 .label => |s| switch (c) {
                     'a'...'z', 'A'...'Z' => {},
-                    else => return try Self.mkLabel(allocator, buffer, s, i - 1),
+                    else => return try Self.mkLabel(
+                        allocator,
+                        buffer[s[0]..i],
+                        s[1],
+                        loc.left(),
+                        i,
+                        loc,
+                    ),
+                },
+                .comment => switch (c) {
+                    '\n' => state = .initial,
+                    else => {},
                 },
             }
+
+            loc = if (c == '\n') loc.down() else loc.right();
         }
 
         return switch (state) {
-            .initial => error.Empty,
-            .number => |s| try Self.mkNumber(buffer, s, buffer.len - 1),
-            .label => |s| try Self.mkLabel(allocator, buffer, s, buffer.len - 1),
+            .initial, .comment => error.Empty,
+            .number => |s| try Self.mkNumber(
+                buffer[s[0]..],
+                s[1],
+                loc.left(),
+                buffer.len,
+                loc,
+            ),
+            .label => |s| try Self.mkLabel(
+                allocator,
+                buffer[s[0]..],
+                s[1],
+                loc.left(),
+                buffer.len,
+                loc,
+            ),
         };
     }
 
     fn allFromBuffer(allocator: Allocator, buffer: []const u8) Error![]Self {
         var offset: usize = 0;
+        var loc: Loc = .{};
 
         var tokens = std.ArrayList(Self).init(allocator);
         errdefer {
@@ -349,12 +426,13 @@ const Token = struct {
         }
 
         while (true) {
-            const token = Self.nextFromBuffer(allocator, buffer, offset) catch |err| switch (err) {
+            const result = Self.nextFromBuffer(allocator, buffer, offset, loc) catch |err| switch (err) {
                 error.Empty => break,
                 else => return err,
             };
-            try tokens.append(token);
-            offset = token.end + 1;
+            try tokens.append(result.token);
+            offset = result.next_offset;
+            loc = result.next_loc;
         }
 
         return try tokens.toOwnedSlice();
@@ -364,14 +442,34 @@ const Token = struct {
         return Self{ .value = value, .start = start, .end = end };
     }
 
-    fn mkNumber(buffer: []const u8, s: usize, i: usize) Error!Self {
-        const number = std.fmt.parseInt(u64, buffer[s .. i + 1], 10) catch return error.Invalid;
-        return Self.mk(.{ .number = number }, s, i);
+    fn mkResult(value: Value, start: Loc, end: Loc, next_offset: usize, next_loc: Loc) NextResult {
+        return .{
+            .token = Self.mk(value, start, end),
+            .next_offset = next_offset,
+            .next_loc = next_loc,
+        };
     }
 
-    fn mkLabel(allocator: Allocator, buffer: []const u8, s: usize, i: usize) Error!Self {
-        const label = try allocator.dupe(u8, buffer[s .. i + 1]);
-        return Self.mk(.{ .label = label }, s, i);
+    fn mkNumber(
+        number_string: []const u8,
+        start: Loc,
+        end: Loc,
+        next_offset: usize,
+        next_loc: Loc,
+    ) Error!NextResult {
+        const number = std.fmt.parseInt(u64, number_string, 10) catch return error.Invalid;
+        return Self.mkResult(.{ .number = number }, start, end, next_offset, next_loc);
+    }
+
+    fn mkLabel(
+        allocator: Allocator,
+        label: []const u8,
+        start: Loc,
+        end: Loc,
+        next_offset: usize,
+        next_loc: Loc,
+    ) Error!NextResult {
+        return Self.mkResult(.{ .label = try allocator.dupe(u8, label) }, start, end, next_offset, next_loc);
     }
 
     fn deinit(self: Self, allocator: Allocator) void {
@@ -395,24 +493,25 @@ fn expectNextFromBuffer(
     expectedEnd: Loc,
     buffer: []const u8,
     offset: usize,
+    loc: Loc,
 ) !void {
-    const token = try Token.nextFromBuffer(std.testing.allocator, buffer, offset);
-    defer token.deinit(std.testing.allocator);
-    try std.testing.expectEqualDeep(Token.mk(expectedValue, expectedStart, expectedEnd), token);
+    const result = try Token.nextFromBuffer(std.testing.allocator, buffer, offset, loc);
+    defer result.token.deinit(std.testing.allocator);
+    try std.testing.expectEqualDeep(Token.mk(expectedValue, expectedStart, expectedEnd), result.token);
 }
 
 test "Token.nextFromBuffer" {
-    try expectNextFromBuffer(.{ .number = 123 }, 0, 2, "123", 0);
-    try expectNextFromBuffer(.{ .number = 123 }, 2, 4, "  123 ", 1);
-    try expectNextFromBuffer(.popen, 0, 0, "(", 0);
-    try expectNextFromBuffer(.pclose, 2, 2, "\t\n)", 1);
-    try expectNextFromBuffer(.{ .label = "awawa" }, 1, 5, " awawa", 0);
+    try expectNextFromBuffer(.{ .number = 123 }, Loc.mk(1, 0), Loc.mk(1, 2), "123", 0, .{});
+    try expectNextFromBuffer(.{ .number = 123 }, Loc.mk(1, 2), Loc.mk(1, 4), "  123 ", 1, .{ .column = 1 });
+    try expectNextFromBuffer(.popen, Loc.mk(1, 0), Loc.mk(1, 0), "(", 0, .{});
+    try expectNextFromBuffer(.pclose, Loc.mk(2, 1), Loc.mk(2, 1), "\t\n )", 1, .{ .column = 1 });
+    try expectNextFromBuffer(.{ .label = "awawa" }, Loc.mk(1, 1), Loc.mk(1, 5), " awawa", 0, .{});
 }
 
-fn expectAllFromBuffer(expected: Token.Error![]const Token.Value, buffer: []const u8) !void {
-    const tokense = Token.allFromBuffer(std.testing.allocator, buffer);
+fn expectAllFromBuffer(expected: Token.Error![]const Token, buffer: []const u8) !void {
+    const tokens_err = Token.allFromBuffer(std.testing.allocator, buffer);
     defer {
-        if (tokense) |tokens| {
+        if (tokens_err) |tokens| {
             for (tokens) |token|
                 token.deinit(std.testing.allocator);
             std.testing.allocator.free(tokens);
@@ -420,22 +519,20 @@ fn expectAllFromBuffer(expected: Token.Error![]const Token.Value, buffer: []cons
     }
 
     if (expected) |expectedTokens| {
-        for (expectedTokens, try tokense) |value, token| {
-            try std.testing.expectEqualDeep(value, token.value);
-        }
+        try std.testing.expectEqualDeep(expectedTokens, try tokens_err);
     } else |expectedError| {
-        try std.testing.expectError(expectedError, tokense);
+        try std.testing.expectError(expectedError, tokens_err);
     }
 }
 
 test "Token.allFromBuffer" {
     try expectAllFromBuffer(&.{
-        .popen,
-        .{ .label = "awa" },
-        .popen,
-        .{ .number = 123_456 },
-        .pclose,
-        .pclose,
+        Token.mk(.popen, Loc.mk(1, 0), Loc.mk(1, 0)),
+        Token.mk(.{ .label = "awa" }, Loc.mk(1, 1), Loc.mk(1, 3)),
+        Token.mk(.popen, Loc.mk(1, 5), Loc.mk(1, 5)),
+        Token.mk(.{ .number = 123_456 }, Loc.mk(1, 6), Loc.mk(1, 11)),
+        Token.mk(.pclose, Loc.mk(1, 12), Loc.mk(1, 12)),
+        Token.mk(.pclose, Loc.mk(1, 13), Loc.mk(1, 13)),
     }, "(awa (123456))");
 
     try expectAllFromBuffer(error.Invalid, "(abc!");
