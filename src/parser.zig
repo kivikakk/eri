@@ -212,11 +212,7 @@ pub const Form = struct {
     }
 
     fn mk(value: Value, start: Loc, end: Loc) Self {
-        return Self{
-            .value = value,
-            .start = start,
-            .end = end,
-        };
+        return Self{ .value = value, .start = start, .end = end };
     }
 
     pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {

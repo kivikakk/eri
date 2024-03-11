@@ -1,15 +1,16 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 pub const Module = struct {
     const Self = @This();
 
     attributes: []const Attribute = &.{},
     name: []const u8,
-    memories: []const Memory,
-    wires: []const Wire,
-    connections: []const Connection,
-    cells: []const Cell,
-    processes: []const Process,
+    memories: []const Memory = &.{},
+    wires: []const Wire = &.{},
+    connections: []const Connection = &.{},
+    cells: []const Cell = &.{},
+    processes: []const Process = &.{},
 
     fn print(self: Self, writer: *Writer) !void {
         try writer.printAttributes(self);
@@ -34,6 +35,11 @@ pub const Module = struct {
 
         writer.indent -= 1;
         try writer.print("end", .{});
+    }
+
+    pub fn deinit(self: Self, allocator: Allocator) void {
+        for (self.wires) |wire| wire.deinit(allocator);
+        allocator.free(self.wires);
     }
 };
 
@@ -80,6 +86,10 @@ pub const Wire = struct {
         } else {
             try writer.print("wire width {} {s}", .{ self.width, self.name });
         }
+    }
+
+    pub fn deinit(self: Self, allocator: Allocator) void {
+        allocator.free(self.name);
     }
 };
 

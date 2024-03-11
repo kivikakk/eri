@@ -11,8 +11,6 @@ pub fn main() !void {
 
     defer _ = gpa.deinit();
 
-    std.debug.print("awawa!\n", .{});
-
     const input = try std.io.getStdIn().readToEndAlloc(alloc, 1048576);
     defer alloc.free(input);
 
@@ -20,6 +18,10 @@ pub fn main() !void {
     defer doc.deinit(alloc);
 
     const mods = try eval(alloc, doc);
+    defer {
+        for (mods) |mod| mod.deinit(alloc);
+        alloc.free(mods);
+    }
 
     try rtlil.output(std.io.getStdOut().writer(), mods);
 }
@@ -48,6 +50,3 @@ pub fn main() !void {
 // cd_sync:
 //
 
-comptime {
-    std.testing.refAllDecls(@import("test.zig"));
-}
