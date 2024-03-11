@@ -1,11 +1,48 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-pub fn parse(alloc: Allocator, input: []const u8) !Doc {
-    _ = alloc;
-    _ = input;
+pub fn parse(allocator: Allocator, input: []const u8) !Doc {
+    const tokens = try Token.allFromBuffer(allocator, input);
+    defer {
+        for (tokens) |token|
+            token.deinit(allocator);
+        allocator.free(tokens);
+    }
 
-    unreachable;
+    const forms = try Form.allFromTokens(allocator, tokens);
+    errdefer {
+        for (forms) |form|
+            form.deinit(allocator);
+        allocator.free(forms);
+    }
+
+    return Doc.fromForms(forms);
+}
+
+pub fn print(allocator: Allocator, formattable: anytype) ![]u8 {
+    return try std.fmt.allocPrint(allocator, "{}", .{formattable});
+}
+
+fn expectRoundtrip(input0: []const u8) !void {
+    const doc0 = try parse(std.testing.allocator, input0);
+    defer doc0.deinit(std.testing.allocator);
+
+    const input1 = try print(std.testing.allocator, doc0);
+    defer std.testing.allocator.free(input1);
+
+    const doc1 = try parse(std.testing.allocator, input1);
+    defer doc1.deinit(std.testing.allocator);
+
+    const input2 = try print(std.testing.allocator, doc1);
+    defer std.testing.allocator.free(input2);
+
+    try std.testing.expectEqualStrings(input1, input2);
+}
+
+test "parse" {
+    try expectRoundtrip("(abc (def))");
+    try expectRoundtrip("   123  8 \n\t  x");
+    try expectRoundtrip("((((((((((((((((((((((()))))))))))))))))))))))");
 }
 
 pub const Loc = usize;
@@ -19,6 +56,13 @@ pub const Doc = struct {
         return Self{
             .forms = forms,
         };
+    }
+
+    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        for (self.forms) |form| {
+            try form.format(fmt, options, writer);
+            try writer.writeByte('\n');
+        }
     }
 
     pub fn deinit(self: Self, alloc: Allocator) void {
@@ -54,14 +98,14 @@ pub const Form = struct {
             initial,
             list: struct {
                 start: Loc,
-                fs: std.ArrayList(Self),
+                forms: std.ArrayList(Self),
             },
         } = .initial;
         errdefer {
             switch (state) {
-                .list => |ls| {
-                    for (ls.fs.items) |f| f.deinit(allocator);
-                    ls.fs.deinit();
+                .list => |list_state| {
+                    for (list_state.forms.items) |f| f.deinit(allocator);
+                    list_state.forms.deinit();
                 },
                 else => {},
             }
@@ -79,19 +123,19 @@ pub const Form = struct {
 
             switch (state) {
                 .initial => switch (token.value) {
-                    .number => |n| break Self.mk(.{ .number = n }, token.start, token.end),
-                    .label => |l| break Self.mk(.{ .label = try allocator.dupe(u8, l) }, token.start, token.end),
+                    .number => |number| break Self.mk(.{ .number = number }, token.start, token.end),
+                    .label => |label| break Self.mk(.{ .label = try allocator.dupe(u8, label) }, token.start, token.end),
                     .popen => state = .{ .list = .{
                         .start = token.start,
-                        .fs = std.ArrayList(Self).init(allocator),
+                        .forms = std.ArrayList(Self).init(allocator),
                     } },
                     else => return error.Unexpected,
                 },
-                .list => |*ls| switch (token.value) {
-                    .pclose => break Self.mk(.{ .list = try ls.fs.toOwnedSlice() }, ls.start, token.end),
+                .list => |*list_state| switch (token.value) {
+                    .pclose => break Self.mk(.{ .list = try list_state.forms.toOwnedSlice() }, list_state.start, token.end),
                     else => {
                         const fc = try Self.nextFromTokens(allocator, tokens[i..]);
-                        try ls.fs.append(fc.form);
+                        try list_state.forms.append(fc.form);
                         skip = fc.consumed - 1;
                     },
                 },
@@ -104,6 +148,24 @@ pub const Form = struct {
         };
     }
 
+    fn allFromTokens(allocator: Allocator, tokens: []const Token) Error![]Self {
+        var offset: usize = 0;
+
+        var forms = std.ArrayList(Self).init(allocator);
+        errdefer {
+            for (forms.items) |form| form.deinit(allocator);
+            forms.deinit();
+        }
+
+        while (offset < tokens.len) {
+            const fc = try Self.nextFromTokens(allocator, tokens[offset..]);
+            try forms.append(fc.form);
+            offset += fc.consumed;
+        }
+
+        return try forms.toOwnedSlice();
+    }
+
     fn mk(value: Value, start: Loc, end: Loc) Self {
         return Self{
             .value = value,
@@ -112,14 +174,29 @@ pub const Form = struct {
         };
     }
 
+    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        switch (self.value) {
+            .number => |number| try std.fmt.format(writer, "{}", .{number}),
+            .label => |label| try writer.writeAll(label),
+            .list => |forms| {
+                try writer.writeByte('(');
+                for (forms, 0..) |form, i| {
+                    if (i > 0) try writer.writeByte(' ');
+                    try form.format(fmt, options, writer);
+                }
+                try writer.writeByte(')');
+            }
+        }
+    }
+
     pub fn deinit(self: Self, alloc: Allocator) void {
         switch (self.value) {
             .number => {},
-            .label => |l| alloc.free(l),
-            .list => |fs| {
-                for (fs) |f|
-                    f.deinit(alloc);
-                alloc.free(fs);
+            .label => |label| alloc.free(label),
+            .list => |forms| {
+                for (forms) |form|
+                    form.deinit(alloc);
+                alloc.free(forms);
             },
         }
     }
@@ -164,6 +241,35 @@ test "Form.nextFromTokens" {
     } }, 0, 13), 6, "(awa (123456))");
     try expectNextFromTokens(error.Unexpected, 0, "(awa");
     try expectNextFromTokens(error.Unexpected, 0, ")");
+}
+
+fn expectAllFromTokens(
+    expectedForms: []const Form,
+    buffer: []const u8,
+) !void {
+    const tokens = try Token.allFromBuffer(std.testing.allocator, buffer);
+    defer {
+        for (tokens) |token|
+            token.deinit(std.testing.allocator);
+        std.testing.allocator.free(tokens);
+    }
+
+    const forms = try Form.allFromTokens(std.testing.allocator, tokens);
+    defer {
+        for (forms) |form|
+            form.deinit(std.testing.allocator);
+        std.testing.allocator.free(forms);
+    }
+
+    try std.testing.expectEqualDeep(expectedForms, forms);
+}
+
+test "Form.allFromTokens" {
+    try expectAllFromTokens(&.{
+        Form.mk(.{ .number = 123 }, 0, 2),
+        Form.mk(.{ .number = 456 }, 4, 6),
+    }, "123 456");
+    try expectAllFromTokens(&.{}, "   ");
 }
 
 const Token = struct {
