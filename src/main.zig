@@ -11,7 +11,7 @@ pub fn main() !void {
 
     defer _ = gpa.deinit();
 
-    std.debug.print("", .{});
+    std.debug.print("awawa", .{});
 
     const input = try std.io.getStdIn().readToEndAlloc(alloc, 1048576);
     defer alloc.free(input);
