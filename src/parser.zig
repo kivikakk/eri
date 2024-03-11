@@ -54,30 +54,38 @@ pub fn print(allocator: Allocator, formattable: anytype) ![]u8 {
     return try std.fmt.allocPrint(allocator, "{}", .{formattable});
 }
 
-fn expectRoundtrip(input0: []const u8) !void {
-    const doc0 = try parse(std.testing.allocator, input0);
-    defer doc0.deinit(std.testing.allocator);
+fn expectRoundtrip(allocator: Allocator, input0: []const u8) !void {
+    const doc0 = try parse(allocator, input0);
+    defer doc0.deinit(allocator);
 
-    const input1 = try print(std.testing.allocator, doc0);
-    defer std.testing.allocator.free(input1);
+    const input1 = try print(allocator, doc0);
+    defer allocator.free(input1);
 
-    const doc1 = try parse(std.testing.allocator, input1);
-    defer doc1.deinit(std.testing.allocator);
+    const doc1 = try parse(allocator, input1);
+    defer doc1.deinit(allocator);
 
-    const input2 = try print(std.testing.allocator, doc1);
-    defer std.testing.allocator.free(input2);
+    const input2 = try print(allocator, doc1);
+    defer allocator.free(input2);
 
     try std.testing.expectEqualStrings(input1, input2);
 }
 
-test "parse" {
-    try expectRoundtrip("(abc (def))");
-    try expectRoundtrip("   123  8 \n\t  x");
-    try expectRoundtrip("((((((((((((((((((((((()))))))))))))))))))))))");
-    try expectRoundtrip(
+fn roundtrips(allocator: Allocator) !void {
+    try expectRoundtrip(allocator, "(abc (def))");
+    try expectRoundtrip(allocator, "   123  8 \n\t  x");
+    try expectRoundtrip(allocator, "((((((((((((((((((((((()))))))))))))))))))))))");
+    try expectRoundtrip(allocator,
         \\ (x ; ... yeah )
         \\  y)
     );
+}
+
+test "parse" {
+    try roundtrips(std.testing.allocator);
+}
+
+test "parse - exhaustive allocation failure check" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, roundtrips, .{});
 }
 
 pub const Doc = struct {
@@ -114,7 +122,7 @@ pub const Form = struct {
     } || Allocator.Error;
 
     pub const Value = union(enum) {
-        number: u64,
+        number: i64,
         label: []const u8,
         list: []const Self,
     };
@@ -133,14 +141,14 @@ pub const Form = struct {
             initial,
             list: struct {
                 start: Loc,
-                forms: std.ArrayList(Self),
+                forms: std.ArrayListUnmanaged(Self),
             },
         } = .initial;
         errdefer {
             switch (state) {
-                .list => |list_state| {
-                    for (list_state.forms.items) |f| f.deinit(allocator);
-                    list_state.forms.deinit();
+                .list => |*list_state| {
+                    for (list_state.forms.items) |form| form.deinit(allocator);
+                    list_state.forms.deinit(allocator);
                 },
                 else => {},
             }
@@ -162,15 +170,16 @@ pub const Form = struct {
                     .label => |label| break Self.mk(.{ .label = try allocator.dupe(u8, label) }, token.start, token.end),
                     .popen => state = .{ .list = .{
                         .start = token.start,
-                        .forms = std.ArrayList(Self).init(allocator),
+                        .forms = std.ArrayListUnmanaged(Self){},
                     } },
                     else => return error.Unexpected,
                 },
                 .list => |*list_state| switch (token.value) {
-                    .pclose => break Self.mk(.{ .list = try list_state.forms.toOwnedSlice() }, list_state.start, token.end),
+                    .pclose => break Self.mk(.{ .list = try list_state.forms.toOwnedSlice(allocator) }, list_state.start, token.end),
                     else => {
                         const next_result = try Self.nextFromTokens(allocator, tokens[i..]);
-                        try list_state.forms.append(next_result.form);
+                        errdefer next_result.form.deinit(allocator);
+                        try list_state.forms.append(allocator, next_result.form);
                         skip = next_result.consumed - 1;
                     },
                 },
@@ -186,19 +195,20 @@ pub const Form = struct {
     fn allFromTokens(allocator: Allocator, tokens: []const Token) Error![]Self {
         var offset: usize = 0;
 
-        var forms = std.ArrayList(Self).init(allocator);
+        var forms = std.ArrayListUnmanaged(Self){};
         errdefer {
             for (forms.items) |form| form.deinit(allocator);
-            forms.deinit();
+            forms.deinit(allocator);
         }
 
         while (offset < tokens.len) {
             const next_result = try Self.nextFromTokens(allocator, tokens[offset..]);
-            try forms.append(next_result.form);
+            errdefer next_result.form.deinit(allocator);
+            try forms.append(allocator, next_result.form);
             offset += next_result.consumed;
         }
 
-        return try forms.toOwnedSlice();
+        return try forms.toOwnedSlice(allocator);
     }
 
     fn mk(value: Value, start: Loc, end: Loc) Self {
@@ -316,7 +326,7 @@ const Token = struct {
     } || Allocator.Error;
 
     const Value = union(enum) {
-        number: u64,
+        number: i64,
         label: []const u8,
         popen,
         pclose,
@@ -358,7 +368,7 @@ const Token = struct {
             switch (state) {
                 .initial => switch (c) {
                     ' ', '\r', '\n', '\t' => {},
-                    '0'...'9' => state = .{ .number = .{ i, loc } },
+                    '-', '0'...'9' => state = .{ .number = .{ i, loc } },
                     'a'...'z', 'A'...'Z' => state = .{ .label = .{ i, loc } },
                     '(' => return Self.mkResult(.popen, loc, loc, i + 1, loc.right()),
                     ')' => return Self.mkResult(.pclose, loc, loc, i + 1, loc.right()),
@@ -419,10 +429,10 @@ const Token = struct {
         var offset: usize = 0;
         var loc: Loc = .{};
 
-        var tokens = std.ArrayList(Self).init(allocator);
+        var tokens = std.ArrayListUnmanaged(Self){};
         errdefer {
             for (tokens.items) |token| token.deinit(allocator);
-            tokens.deinit();
+            tokens.deinit(allocator);
         }
 
         while (true) {
@@ -430,12 +440,12 @@ const Token = struct {
                 error.Empty => break,
                 else => return err,
             };
-            try tokens.append(result.token);
+            try tokens.append(allocator, result.token);
             offset = result.next_offset;
             loc = result.next_loc;
         }
 
-        return try tokens.toOwnedSlice();
+        return try tokens.toOwnedSlice(allocator);
     }
 
     fn mk(value: Value, start: Loc, end: Loc) Self {
@@ -457,7 +467,7 @@ const Token = struct {
         next_offset: usize,
         next_loc: Loc,
     ) Error!NextResult {
-        const number = std.fmt.parseInt(u64, number_string, 10) catch return error.Invalid;
+        const number = std.fmt.parseInt(i64, number_string, 10) catch return error.Invalid;
         return Self.mkResult(.{ .number = number }, start, end, next_offset, next_loc);
     }
 
@@ -530,10 +540,10 @@ test "Token.allFromBuffer" {
         Token.mk(.popen, Loc.mk(1, 0), Loc.mk(1, 0)),
         Token.mk(.{ .label = "awa" }, Loc.mk(1, 1), Loc.mk(1, 3)),
         Token.mk(.popen, Loc.mk(1, 5), Loc.mk(1, 5)),
-        Token.mk(.{ .number = 123_456 }, Loc.mk(1, 6), Loc.mk(1, 11)),
-        Token.mk(.pclose, Loc.mk(1, 12), Loc.mk(1, 12)),
+        Token.mk(.{ .number = -123_456 }, Loc.mk(1, 6), Loc.mk(1, 12)),
         Token.mk(.pclose, Loc.mk(1, 13), Loc.mk(1, 13)),
-    }, "(awa (123456))");
+        Token.mk(.pclose, Loc.mk(1, 14), Loc.mk(1, 14)),
+    }, "(awa (-123456))");
 
     try expectAllFromBuffer(error.Invalid, "(abc!");
 }

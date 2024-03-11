@@ -11,7 +11,7 @@ pub fn main() !void {
 
     defer _ = gpa.deinit();
 
-    std.debug.print("awawa", .{});
+    std.debug.print("awawa!\n", .{});
 
     const input = try std.io.getStdIn().readToEndAlloc(alloc, 1048576);
     defer alloc.free(input);
@@ -51,9 +51,3 @@ pub fn main() !void {
 comptime {
     std.testing.refAllDecls(@import("test.zig"));
 }
-
-// iCEBreaker: 12MHz.
-//
-// (reg x 24)
-// (sync (set x (+ x 1)))
-// (connect x[-1] led0)
