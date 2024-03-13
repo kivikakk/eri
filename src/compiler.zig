@@ -42,6 +42,67 @@ pub const Compiler = struct {
         return .{ .allocator = allocator };
     }
 
+    pub fn deinit(self: *Self) void {
+        for (self.registers.items) |register| register.deinit(self.allocator);
+        self.registers.deinit(self.allocator);
+    }
+
+    fn nomTop(self: *Self, form: parser.Form) Error!void {
+        const els = switch (form.value) {
+            .list => |forms| forms,
+            else => return error.Unexpected,
+        };
+
+        std.debug.assert(els.len > 0);
+
+        switch (els[0].value) {
+            .label => |label| {
+                if (std.mem.eql(u8, label, "reg")) {
+                    const reg = try self.nomReg(els[1..]);
+                    errdefer reg.deinit(self.allocator);
+                    try self.registers.append(self.allocator, reg);
+                } else if (std.mem.eql(u8, label, "sync")) {} else if (std.mem.eql(u8, label, "connect")) {} else {
+                    return error.Unexpected;
+                }
+            },
+            else => return error.Unexpected,
+        }
+    }
+
+    fn nomReg(self: Self, args: []const parser.Form) Error!Register {
+        std.debug.assert(args.len >= 1);
+
+        const name = try std.fmt.allocPrint(self.allocator, "\\{s}", .{args[0].value.label});
+        errdefer self.allocator.free(name);
+
+        const width: usize = if (args.len >= 2) @intCast(args[1].value.number) else 1;
+
+        var init = try self.allocator.alloc(u1, width);
+        if (args.len >= 3) {
+            switch (args[2].value) {
+                .number => |number| {
+                    if (number < 0)
+                        std.debug.assert(number >= -std.math.pow(i64, 2, @intCast(width - 1)))
+                    else
+                        std.debug.assert(number < std.math.pow(i64, 2, @intCast(width)));
+                    var p: i64 = 1;
+                    var i: usize = 0;
+                    while (i < width) : (i += 1) {
+                        init[i] = if ((number & p) == p) 1 else 0;
+                        p *= 2;
+                    }
+                },
+                else => return error.Unexpected,
+            }
+        }
+
+        return .{
+            .name = name,
+            .width = width,
+            .init = init,
+        };
+    }
+
     fn finalise(self: *Self) !rtlil.Doc {
         var wires = std.ArrayListUnmanaged(rtlil.Wire){};
         errdefer {
