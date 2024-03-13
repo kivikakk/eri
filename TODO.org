@@ -1,0 +1,6 @@
+#+title: Todo
+
+* Minor
+** DONE There's a few anyerrors around.
+** TODO rtlil model feels a bit wonky (esp around Assign/Signal/RValue/Bitvector).
+** DONE Drop AnyWriter usage.

@@ -1,6 +1,33 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+pub fn output(writer: anytype, what: anytype) !void {
+    var w = mkWriter(writer);
+    try w.printObject(what);
+}
+
+pub fn allocOutput(allocator: Allocator, what: anytype) ![]const u8 {
+    var out = std.ArrayListUnmanaged(u8){};
+    defer out.deinit(allocator);
+    try output(out.writer(allocator), what);
+    return try out.toOwnedSlice(allocator);
+}
+
+pub const Doc = struct {
+    const Self = @This();
+
+    modules: []const Module,
+
+    pub fn fromModules(modules: []Module) Self {
+        return Self{ .modules = modules };
+    }
+
+    pub fn deinit(self: Self, allocator: Allocator) void {
+        for (self.modules) |module| module.deinit(allocator);
+        allocator.free(self.modules);
+    }
+};
+
 pub const Module = struct {
     const Self = @This();
 
@@ -11,31 +38,6 @@ pub const Module = struct {
     connections: []const Connection = &.{},
     cells: []const Cell = &.{},
     processes: []const Process = &.{},
-
-    fn print(self: Self, writer: *Writer) !void {
-        try writer.printAttributes(self);
-
-        try writer.print("module {s}", .{self.name});
-        writer.indent += 1;
-
-        for (self.memories) |memory|
-            try memory.print(writer);
-
-        for (self.wires) |wire|
-            try wire.print(writer);
-
-        for (self.connections) |connection|
-            try connection.print(writer);
-
-        for (self.cells) |cell|
-            try cell.print(writer);
-
-        for (self.processes) |process|
-            try process.print(writer);
-
-        writer.indent -= 1;
-        try writer.print("end", .{});
-    }
 
     pub fn deinit(self: Self, allocator: Allocator) void {
         for (self.wires) |wire| wire.deinit(allocator);
@@ -48,10 +50,6 @@ pub const Attribute = struct {
 
     name: []const u8,
     value: Value,
-
-    pub fn print(self: Self, writer: *Writer) !void {
-        try writer.print("attribute {s} {}", .{ self.name, self.value });
-    }
 };
 
 pub const Memory = struct {
@@ -61,11 +59,6 @@ pub const Memory = struct {
     width: usize,
     size: usize,
     name: []const u8,
-
-    fn print(self: Self, writer: *Writer) !void {
-        try writer.printAttributes(self);
-        try writer.print("memory width {} size {} {s}", .{ self.width, self.size, self.name });
-    }
 };
 
 pub const Wire = struct {
@@ -80,14 +73,6 @@ pub const Wire = struct {
     spec: ?Spec = null,
     name: []const u8,
 
-    fn print(self: Self, writer: *Writer) !void {
-        if (self.spec) |spec| {
-            try writer.print("wire width {} {s} {} {s}", .{ self.width, @tagName(spec.dir), spec.index, self.name });
-        } else {
-            try writer.print("wire width {} {s}", .{ self.width, self.name });
-        }
-    }
-
     pub fn deinit(self: Self, allocator: Allocator) void {
         allocator.free(self.name);
     }
@@ -101,22 +86,6 @@ pub const Cell = struct {
     name: []const u8,
     parameters: []const Parameter,
     connections: []const Connection,
-
-    fn print(self: Self, writer: *Writer) !void {
-        try writer.printAttributes(self);
-
-        try writer.print("cell {s} {s}", .{ self.kind, self.name });
-        writer.indent += 1;
-
-        for (self.parameters) |parameter|
-            try parameter.print(writer);
-
-        for (self.connections) |connection|
-            try connection.print(writer);
-
-        writer.indent -= 1;
-        try writer.print("end", .{});
-    }
 };
 
 pub const Parameter = struct {
@@ -124,10 +93,6 @@ pub const Parameter = struct {
 
     name: []const u8,
     value: Value,
-
-    pub fn print(self: Self, writer: *Writer) !void {
-        try writer.print("parameter {s} {}", .{ self.name, self.value });
-    }
 };
 
 pub const Value = union(enum) {
@@ -160,10 +125,6 @@ pub const Connection = struct {
 
     name: []const u8,
     target: RValue,
-
-    pub fn print(self: Self, writer: *Writer) !void {
-        try writer.print("connect {s} {}", .{ self.name, self.target });
-    }
 };
 
 pub const RValue = union(enum) {
@@ -173,7 +134,12 @@ pub const RValue = union(enum) {
     constant: Bitvector,
     cat: Cat,
 
-    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+    pub fn format(
+        self: Self,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) @TypeOf(writer).Error!void {
         switch (self) {
             inline else => |payload| try payload.format(fmt, options, writer),
         }
@@ -186,7 +152,12 @@ pub const Signal = struct {
     name: []const u8,
     range: Range = .{},
 
-    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+    pub fn format(
+        self: Self,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
         _ = fmt;
         _ = options;
 
@@ -199,7 +170,12 @@ pub const Bitvector = struct {
 
     bits: []const u1,
 
-    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+    pub fn format(
+        self: Self,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
         _ = fmt;
         _ = options;
 
@@ -216,8 +192,12 @@ pub const Cat = struct {
 
     values: []const RValue,
 
-    pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) anyerror!void {
-        // XXX: anyerror
+    pub fn format(
+        self: Self,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
         try writer.writeAll("{ ");
         for (self.values) |value| {
             try value.format(fmt, options, writer);
@@ -251,23 +231,7 @@ pub const Process = struct {
     attributes: []Attribute = &.{},
     name: []const u8,
     assigns: []const Assign = &.{},
-    switches: []const Switch,
-
-    pub fn print(self: Self, writer: *Writer) !void {
-        try writer.printAttributes(self);
-
-        try writer.print("process {s}", .{self.name});
-        writer.indent += 1;
-
-        for (self.assigns) |assign|
-            try assign.print(writer);
-
-        for (self.switches) |switch_|
-            try switch_.print(writer);
-
-        writer.indent -= 1;
-        try writer.print("end", .{});
-    }
+    switches: []const Switch = &.{},
 };
 
 pub const Assign = struct {
@@ -275,10 +239,6 @@ pub const Assign = struct {
 
     lhs: Signal,
     rhs: RValue,
-
-    pub fn print(self: Self, writer: *Writer) !void {
-        try writer.print("assign {} {}", .{ self.lhs, self.rhs });
-    }
 };
 
 pub const Switch = struct {
@@ -287,73 +247,159 @@ pub const Switch = struct {
     lhs: Signal,
     cases: []const Case,
 
-    pub fn print(self: Self, writer: *Writer) !void {
-        try writer.print("switch {}", .{self.lhs});
-        writer.indent += 1;
-
-        for (self.cases) |case|
-            try case.print(writer);
-
-        writer.indent -= 1;
-        try writer.print("end", .{});
-    }
-
     pub const Case = struct {
         value: ?Bitvector,
         assigns: []const Assign = &.{},
         switches: []const Switch = &.{},
-
-        pub fn print(self: Case, writer: *Writer) anyerror!void {
-            // XXX: anyerror.e
-            if (self.value) |value| {
-                try writer.print("case {}", .{value});
-            } else {
-                try writer.print("case", .{});
-            }
-            writer.indent += 1;
-            for (self.assigns) |assign|
-                try assign.print(writer);
-            for (self.switches) |switch_|
-                try switch_.print(writer);
-            writer.indent -= 1;
-        }
     };
 };
 
-pub fn output(writer: anytype, mods: []const Module) !void {
-    var w = Writer.init(writer.any());
+fn Writer(comptime T: type) type {
+    return struct {
+        const Self = @This();
 
-    for (mods) |mod| {
-        try mod.print(&w);
-    }
+        inner: T,
+        indent: u8 = 0,
+
+        fn mk(inner: T) Self {
+            return .{ .inner = inner };
+        }
+
+        fn writeIndent(self: Self) !void {
+            try self.inner.writeByteNTimes(' ', self.indent * 2);
+        }
+
+        fn printLine(self: Self, comptime fmt: []const u8, args: anytype) !void {
+            try self.writeIndent();
+            try std.fmt.format(self.inner, fmt ++ "\n", args);
+        }
+
+        fn printAttributes(self: Self, target: anytype) !void {
+            for (target.attributes) |attribute| {
+                try self.printLine("attribute {s} {}", .{ attribute.name, attribute.value });
+            }
+        }
+
+        fn printObject(self: *Self, what: anytype) T.Error!void {
+            switch (@TypeOf(what)) {
+                Doc => {
+                    for (what.modules) |module|
+                        try self.printObject(module);
+                },
+                Module => {
+                    try self.printAttributes(what);
+
+                    try self.printLine("module {s}", .{what.name});
+                    self.indent += 1;
+
+                    for (what.memories) |memory|
+                        try self.printObject(memory);
+
+                    for (what.wires) |wire|
+                        try self.printObject(wire);
+
+                    for (what.connections) |connection|
+                        try self.printObject(connection);
+
+                    for (what.cells) |cell|
+                        try self.printObject(cell);
+
+                    for (what.processes) |process|
+                        try self.printObject(process);
+
+                    self.indent -= 1;
+                    try self.printLine("end", .{});
+                },
+                Attribute => {
+                    try self.printLine("attribute {s} {}", .{ what.name, what.value });
+                },
+                Memory => {
+                    try self.printAttributes(what);
+                    try self.printLine("memory width {} size {} {s}", .{ what.width, what.size, what.name });
+                },
+                Wire => {
+                    if (what.spec) |spec| {
+                        try self.printLine("wire width {} {s} {} {s}", .{
+                            what.width,
+                            @tagName(spec.dir),
+                            spec.index,
+                            what.name,
+                        });
+                    } else {
+                        try self.printLine("wire width {} {s}", .{ what.width, what.name });
+                    }
+                },
+                Cell => {
+                    try self.printAttributes(what);
+
+                    try self.printLine("cell {s} {s}", .{ what.kind, what.name });
+                    self.indent += 1;
+
+                    for (what.parameters) |parameter|
+                        try self.printObject(parameter);
+
+                    for (what.connections) |connection|
+                        try self.printObject(connection);
+
+                    self.indent -= 1;
+                    try self.printLine("end", .{});
+                },
+                Parameter => {
+                    try self.printLine("parameter {s} {}", .{ what.name, what.value });
+                },
+                Connection => {
+                    try self.printLine("connect {s} {}", .{ what.name, what.target });
+                },
+                Process => {
+                    try self.printAttributes(what);
+
+                    try self.printLine("process {s}", .{what.name});
+                    self.indent += 1;
+
+                    for (what.assigns) |assign|
+                        try self.printObject(assign);
+
+                    for (what.switches) |switch_|
+                        try self.printObject(switch_);
+
+                    self.indent -= 1;
+                    try self.printLine("end", .{});
+                },
+                Assign => {
+                    try self.printLine("assign {} {}", .{ what.lhs, what.rhs });
+                },
+                Switch => {
+                    try self.printLine("switch {}", .{what.lhs});
+                    self.indent += 1;
+
+                    for (what.cases) |case|
+                        try self.printObject(case);
+
+                    self.indent -= 1;
+                    try self.printLine("end", .{});
+                },
+                Switch.Case => {
+                    if (what.value) |value| {
+                        try self.printLine("case {}", .{value});
+                    } else {
+                        try self.printLine("case", .{});
+                    }
+                    self.indent += 1;
+                    for (what.assigns) |assign|
+                        try self.printObject(assign);
+                    for (what.switches) |switch_|
+                        try self.printObject(switch_);
+                    self.indent -= 1;
+                },
+                else => unreachable,
+            }
+        }
+    };
 }
 
-const Writer = struct {
-    const Self = @This();
-
-    inner: std.io.AnyWriter,
-
-    indent: u8 = 0,
-
-    fn init(inner: std.io.AnyWriter) Writer {
-        return .{ .inner = inner };
-    }
-
-    fn writeIndent(self: Self) !void {
-        try self.inner.writeByteNTimes(' ', self.indent * 2);
-    }
-
-    fn print(self: Self, comptime fmt: []const u8, args: anytype) !void {
-        try self.writeIndent();
-        try std.fmt.format(self.inner, fmt ++ "\n", args);
-    }
-
-    fn printAttributes(self: Self, target: anytype) !void {
-        for (target.attributes) |attribute| {
-            try self.print("attribute {s} {}", .{ attribute.name, attribute.value });
-        }
-    }
-};
+fn mkWriter(inner: anytype) Writer(@TypeOf(inner)) {
+    return Writer(@TypeOf(inner)).mk(inner);
+}
 
 // <<top.il:
 //   attribute \generator "Amaranth"
@@ -511,19 +557,14 @@ const Writer = struct {
 //   end
 // <<
 
-// TODO: checkAllAllocationFailures
-
-fn expectPrint(arg: anytype, expected: []const u8) !void {
-    var out = std.ArrayList(u8).init(std.testing.allocator);
-    defer out.deinit();
-    var w = Writer.init(out.writer().any());
-
-    try arg.print(&w);
-    try std.testing.expectEqualStrings(expected, out.items);
+fn expectOutput(arg: anytype, expected: []const u8) !void {
+    const out = try allocOutput(std.testing.allocator, arg);
+    defer std.testing.allocator.free(out);
+    try std.testing.expectEqualStrings(expected, out);
 }
 
 test "module print" {
-    try expectPrint(Module{
+    try expectOutput(Module{
         .attributes = &.{
             .{ .name = "\\generator", .value = .{ .string = "eri" } },
             .{ .name = "\\top", .value = .{ .number = 1 } },
@@ -659,7 +700,7 @@ test "module print" {
 }
 
 test "cell print" {
-    try expectPrint(Cell{
+    try expectOutput(Cell{
         .kind = "$memrd_v2",
         .name = "$70",
         .parameters = &.{

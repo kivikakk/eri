@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 
 const rtlil = @import("./rtlil.zig");
 const parser = @import("./parser.zig");
-const eval = @import("./eval.zig").eval;
+const Compiler = @import("./compiler.zig").Compiler;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -14,16 +14,10 @@ pub fn main() !void {
     const input = try std.io.getStdIn().readToEndAlloc(alloc, 1048576);
     defer alloc.free(input);
 
-    var doc = try parser.parse(alloc, input);
-    defer doc.deinit(alloc);
+    const il = try Compiler.compileBuffer(alloc, input);
+    defer il.deinit(alloc);
 
-    const mods = try eval(alloc, doc);
-    defer {
-        for (mods) |mod| mod.deinit(alloc);
-        alloc.free(mods);
-    }
-
-    try rtlil.output(std.io.getStdOut().writer(), mods);
+    try rtlil.output(std.io.getStdOut().writer(), il);
 }
 
 // Gourd zero for synthesis:
@@ -49,4 +43,3 @@ pub fn main() !void {
 //
 // cd_sync:
 //
-

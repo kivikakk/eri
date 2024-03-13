@@ -84,7 +84,7 @@ test "parse" {
     try roundtrips(std.testing.allocator);
 }
 
-test "parse - exhaustive allocation failure check" {
+test "parse - CAAF" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, roundtrips, .{});
 }
 
