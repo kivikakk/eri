@@ -7,3 +7,4 @@
 ** TODO "writeAttributes" based on if the target type has attributes.
 ** STRT rtlil parser.
 ** TODO rtlil parser string escapes
+** TODO rtlil parser handle cat { ... }

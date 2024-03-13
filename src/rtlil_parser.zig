@@ -5,7 +5,11 @@ const common = @import("common.zig");
 
 pub fn parse(comptime T: type, allocator: Allocator, buffer: []const u8) Parser.Error!T {
     var parser = Parser.mk(allocator, buffer);
-    return try parser.parse(T);
+    return switch (T) {
+        rtlil.Doc => .{ .modules = try parser.parse() },
+        rtlil.Cell => try parser.parseCell("kind", "name", &.{}),
+        else => @compileError("no parse() for " ++ @typeName(T)),
+    };
 }
 
 const Parser = struct {
@@ -26,67 +30,134 @@ const Parser = struct {
         };
     }
 
-    fn parse(self: *Self, comptime T: type) Error!T {
-        switch (T) {
-            rtlil.Module => {
-                var attributes = std.ArrayListUnmanaged(rtlil.Attribute){};
+    fn parse(self: *Self) Error![]rtlil.Module {
+        var modules = std.ArrayListUnmanaged(rtlil.Module){};
 
-                var name: ?[]const u8 = null;
-                var module_attributes: []rtlil.Attribute = &.{};
-                var wires = std.ArrayListUnmanaged(rtlil.Wire){};
-                var memories = std.ArrayListUnmanaged(rtlil.Memory){};
+        var attributes = std.ArrayListUnmanaged(rtlil.Attribute){};
+        var name: ?[]const u8 = null;
+        var module_attributes: []rtlil.Attribute = &.{};
+        var wires = std.ArrayListUnmanaged(rtlil.Wire){};
+        var memories = std.ArrayListUnmanaged(rtlil.Memory){};
+        var connects = std.ArrayListUnmanaged(rtlil.Connection){};
+        var cells = std.ArrayListUnmanaged(rtlil.Cell){};
 
-                errdefer {
-                    common.deinit(self.allocator, &attributes);
-                    common.deinit(self.allocator, module_attributes);
-                    if (name) |n|
-                        self.allocator.free(n);
-                    common.deinit(self.allocator, &wires);
-                    common.deinit(self.allocator, &memories);
-                }
-                while (true) {
-                    const line = self.parseLine() catch |err| switch (err) {
-                        error.Empty => break,
-                        else => return err,
+        errdefer {
+            common.deinit(self.allocator, &modules);
+            common.deinit(self.allocator, &attributes);
+            common.deinit(self.allocator, module_attributes);
+            if (name) |n|
+                self.allocator.free(n);
+            common.deinit(self.allocator, &wires);
+            common.deinit(self.allocator, &memories);
+            common.deinit(self.allocator, &connects);
+            common.deinit(self.allocator, &cells);
+        }
+
+        while (true) {
+            const line = try self.parseLine();
+            errdefer line.deinit(self.allocator);
+
+            switch (line) {
+                .attribute => |props| {
+                    try attributes.append(self.allocator, .{
+                        .name = props.name,
+                        .value = props.value,
+                    });
+                },
+                .module => |props| {
+                    name = props.name;
+                    module_attributes = try attributes.toOwnedSlice(self.allocator);
+                },
+                .wire => |props| {
+                    std.debug.assert(attributes.items.len == 0);
+                    try wires.append(self.allocator, .{
+                        .width = props.width,
+                        .spec = props.spec,
+                        .name = props.name,
+                    });
+                },
+                .memory => |props| {
+                    const memory_attributes = try attributes.toOwnedSlice(self.allocator);
+                    errdefer common.deinit(self.allocator, memory_attributes);
+                    try memories.append(self.allocator, .{
+                        .attributes = memory_attributes,
+                        .width = props.width,
+                        .size = props.size,
+                        .name = props.name,
+                    });
+                },
+                .connect => |props| {
+                    std.debug.assert(attributes.items.len == 0);
+                    try connects.append(self.allocator, .{
+                        .name = props.name,
+                        .target = props.target,
+                    });
+                },
+                .cell => |props| {
+                    const cell_attributes = try attributes.toOwnedSlice(self.allocator);
+                    errdefer common.deinit(self.allocator, cell_attributes);
+                    // XXX errdefer and cell_attributes ownership isn't right.
+                    const cell = try self.parseCell(props.kind, props.name, cell_attributes);
+                    errdefer cell.deinit(self.allocator);
+                    try cells.append(self.allocator, cell);
+                },
+                else => std.debug.panic("unexpected while parsing module: .{}\n", .{line}),
+            }
+        }
+
+        std.debug.assert(attributes.items.len == 0);
+        std.debug.assert(name == null);
+        std.debug.assert(module_attributes.items.len == 0);
+        std.debug.assert(wires.items.len == 0);
+        std.debug.assert(memories.items.len == 0);
+        std.debug.assert(connects.items.len == 0);
+        std.debug.assert(cells.items.len == 0);
+
+        return modules;
+    }
+
+    fn parseCell(
+        self: *Self,
+        kind: []const u8,
+        name: []const u8,
+        attributes: []const rtlil.Attribute,
+    ) Error!rtlil.Cell {
+        var parameters = std.ArrayListUnmanaged(rtlil.Parameter){};
+        var connects = std.ArrayListUnmanaged(rtlil.Connection){};
+
+        errdefer {
+            common.deinit(self.allocator, parameters);
+            common.deinit(self.allocator, connects);
+        }
+
+        while (true) {
+            const line = try self.parseLine();
+            errdefer line.deinit(self.allocator);
+
+            switch (line) {
+                .parameter => |props| try parameters.append(self.allocator, .{
+                    .name = props.name,
+                    .value = props.value,
+                }),
+                .connect => |props| try connects.append(self.allocator, .{
+                    .name = props.name,
+                    .target = props.target,
+                }),
+                .end => {
+                    const o_parameters = try parameters.toOwnedSlice(self.allocator);
+                    errdefer common.deinit(self.allocator, parameters);
+                    const o_connects = try connects.toOwnedSlice(self.allocator);
+
+                    return .{
+                        .attributes = attributes,
+                        .kind = kind,
+                        .name = name,
+                        .parameters = o_parameters,
+                        .connections = o_connects,
                     };
-                    errdefer line.deinit(self.allocator);
-
-                    switch (line) {
-                        .attribute => |props| {
-                            try attributes.append(self.allocator, .{
-                                .name = props.name,
-                                .value = props.value,
-                            });
-                        },
-                        .module => |props| {
-                            name = props.name;
-                            module_attributes = try attributes.toOwnedSlice(self.allocator);
-                        },
-                        .wire => |props| {
-                            std.debug.assert(attributes.items.len == 0);
-                            try wires.append(self.allocator, .{
-                                .width = props.width,
-                                .spec = props.spec,
-                                .name = props.name,
-                            });
-                        },
-                        .memory => |props| {
-                            const memory_attributes = try attributes.toOwnedSlice(self.allocator);
-                            errdefer common.deinit(self.allocator, memory_attributes);
-                            try memories.append(self.allocator, .{
-                                .attributes = memory_attributes,
-                                .width = props.width,
-                                .size = props.size,
-                                .name = props.name,
-                            });
-                        },
-                        else => @panic("unexpected while parsing module"),
-                    }
-                }
-
-                std.debug.panic("reached end\n", .{});
-            },
-            else => @panic("don't know how to parse from " ++ @typeName(T)),
+                },
+                else => std.debug.panic("unexpected while parsing cell: .{}\n", .{line}),
+            }
         }
     }
 
@@ -104,15 +175,26 @@ const Line = union(enum) {
     module: struct { name: []const u8 },
     memory: struct { width: usize, size: usize, name: []const u8 },
     wire: struct { width: usize, spec: ?rtlil.Wire.Spec, name: []const u8 },
+    connect: struct { name: []const u8, target: rtlil.RValue },
+    cell: struct { kind: []const u8, name: []const u8 },
+    parameter: struct { name: []const u8, value: rtlil.Value },
     end,
 
     fn deinit(self: Self, allocator: Allocator) void {
         switch (self) {
-            .attribute => |props| {
+            inline .attribute, .parameter => |props| {
                 allocator.free(props.name);
                 props.value.deinit(allocator);
             },
             inline .module, .memory, .wire => |props| allocator.free(props.name),
+            .connect => |props| {
+                allocator.free(props.name);
+                props.target.deinit(allocator);
+            },
+            .cell => |props| {
+                allocator.free(props.kind);
+                allocator.free(props.name);
+            },
             .end => {},
         }
     }
@@ -130,13 +212,7 @@ const Line = union(enum) {
             std.debug.assert(tokens.len == 3);
             const name = try allocator.dupe(u8, tokens[1].bareword);
             errdefer allocator.free(name);
-
-            const value: rtlil.Value = switch (tokens[2]) {
-                .number => |number| .{ .number = number },
-                .string => |string| .{ .string = try allocator.dupe(u8, string) },
-                else => @panic("unhandled attribute value type"),
-            };
-
+            const value: rtlil.Value = try Self.parseValue(allocator, tokens[2]);
             return .{ .attribute = .{ .name = name, .value = value } };
         } else if (std.mem.eql(u8, kind, "module")) {
             std.debug.assert(tokens.len == 2);
@@ -172,11 +248,67 @@ const Line = union(enum) {
                 .width = width,
                 .spec = spec,
             } };
+        } else if (std.mem.eql(u8, kind, "connect")) {
+            return Self.parseConnect(allocator, tokens);
+        } else if (std.mem.eql(u8, kind, "cell")) {
+            std.debug.assert(tokens.len == 3);
+            const cell_kind = try allocator.dupe(u8, tokens[1].bareword);
+            errdefer allocator.free(cell_kind);
+            const name = try allocator.dupe(u8, tokens[2].bareword);
+            return .{ .cell = .{ .kind = cell_kind, .name = name } };
+        } else if (std.mem.eql(u8, kind, "parameter")) {
+            std.debug.assert(tokens.len == 3);
+            const name = try allocator.dupe(u8, tokens[1].bareword);
+            errdefer allocator.free(name);
+            const value: rtlil.Value = try Self.parseValue(allocator, tokens[2]);
+            return .{ .parameter = .{ .name = name, .value = value } };
+        } else if (std.mem.eql(u8, kind, "end")) {
+            return .end;
         } else {
             std.debug.panic("unhandled rtlil keyword: {s}\n", .{kind});
         }
 
         unreachable;
+    }
+
+    fn parseValue(allocator: Allocator, value: Token) Parser.Error!rtlil.Value {
+        return switch (value) {
+            .number => |number| .{ .number = number },
+            .string => |string| .{ .string = try allocator.dupe(u8, string) },
+            else => @panic("unhandled attribute value type"),
+        };
+    }
+
+    fn parseConnect(allocator: Allocator, tokens: []Token) Parser.Error!Self {
+        std.debug.assert(tokens.len == 3 or tokens.len == 4);
+        const name = try allocator.dupe(u8, tokens[1].bareword);
+        errdefer allocator.free(name);
+        const target: rtlil.RValue = rvalue: {
+            switch (tokens[2]) {
+                .bareword => |bareword| {
+                    // m h trailing range, m n
+                    const rname = try allocator.dupe(u8, bareword);
+                    const range = range: {
+                        if (tokens.len == 3)
+                            break :range null;
+                        break :range tokens[3].range;
+                    };
+                    break :rvalue .{ .signal = .{ .name = rname, .range = range } };
+                },
+                .bv => |bv| {
+                    std.debug.assert(tokens.len == 3);
+                    break :rvalue .{ .constant = bv };
+                },
+                .copen => {
+                    @panic("big todo"); // TODO
+                },
+                else => std.debug.panic("unhandled rtlil rvalue: {}\n", .{tokens[2]}),
+            }
+        };
+        return .{ .connect = .{
+            .name = name,
+            .target = target,
+        } };
     }
 };
 

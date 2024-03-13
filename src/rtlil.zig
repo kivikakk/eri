@@ -200,7 +200,7 @@ pub const Signal = struct {
     const Self = @This();
 
     name: []const u8,
-    range: Range = .{},
+    range: ?Range = null,
 
     pub fn deinit(self: Self, allocator: Allocator) void {
         allocator.free(self.name);
@@ -215,7 +215,10 @@ pub const Signal = struct {
         _ = fmt;
         _ = options;
 
-        try std.fmt.format(writer, "{s} [{}]", .{ self.name, self.range });
+        if (self.range) |range|
+            try std.fmt.format(writer, "{s} [{}]", .{ self.name, range })
+        else
+            try writer.writeAll(self.name);
     }
 };
 
@@ -477,7 +480,7 @@ fn Writer(comptime T: type) type {
                         try self.printObject(switch_);
                     self.indent -= 1;
                 },
-                else => unreachable,
+                else => std.debug.print("unhandled in printObject: {any}\n", .{what}),
             }
         }
     };
@@ -643,16 +646,14 @@ fn mkWriter(inner: anytype) Writer(@TypeOf(inner)) {
 //   end
 // <<
 
-fn expectOutputAndRoundtrip(allocator: Allocator, arg: anytype, expected: []const u8) !void {
+fn expectOutputAndRoundtrip(comptime T: type, allocator: Allocator, arg: T, expected: []const u8) !void {
     const out = try allocOutput(allocator, arg);
     defer allocator.free(out);
     try std.testing.expectEqualStrings(expected, out);
 
-    const comp = try parse(@TypeOf(arg), allocator, out);
-    defer {
-        if (@hasDecl(@TypeOf(comp), "deinit"))
-            comp.deinit(allocator);
-    }
+    const comp = try parse(T, allocator, out);
+    defer common.deinit(allocator, comp);
+
     try std.testing.expectEqualDeep(arg, comp);
 }
 
@@ -661,7 +662,7 @@ test "module print - CAAF" {
 }
 
 fn testModulePrint(allocator: Allocator) !void {
-    try expectOutputAndRoundtrip(allocator, Module{
+    try expectOutputAndRoundtrip(Doc, allocator, .{ .modules = &.{.{
         .attributes = &.{
             .{ .name = "\\generator", .value = .{ .string = "eri" } },
             .{ .name = "\\top", .value = .{ .number = 1 } },
@@ -680,7 +681,7 @@ fn testModulePrint(allocator: Allocator) !void {
             .{ .width = 1, .spec = .{ .dir = .inout, .index = 0 }, .name = "\\led_0__io" },
         },
         .connections = &.{.{ .name = "\\i2c_bus__busy", .target = .{
-            .signal = .{ .name = "\\led_0__o" },
+            .signal = .{ .name = "\\led_0__o", .range = .{} },
         } }},
         .cells = &.{.{
             .attributes = &.{
@@ -707,8 +708,8 @@ fn testModulePrint(allocator: Allocator) !void {
         .processes = &.{.{
             .name = "$30",
             .assigns = &.{.{
-                .lhs = .{ .name = "$8" },
-                .rhs = .{ .signal = .{ .name = "\\w_en" } },
+                .lhs = .{ .name = "$8", .range = .{} },
+                .rhs = .{ .signal = .{ .name = "\\w_en", .range = .{} } },
             }},
             .switches = &.{ .{
                 .lhs = .{ .name = "\\fsm_state", .range = .{ .upper = 1 } },
@@ -716,34 +717,40 @@ fn testModulePrint(allocator: Allocator) !void {
                     .{
                         .value = .{ .bits = &.{ 0, 0 } },
                         .assigns = &.{
-                            .{ .lhs = .{ .name = "$8" }, .rhs = .{ .constant = .{ .bits = &.{0} } } },
+                            .{
+                                .lhs = .{ .name = "$8", .range = .{} },
+                                .rhs = .{ .constant = .{ .bits = &.{0} } },
+                            },
                         },
                     },
                     .{ .value = .{ .bits = &.{ 1, 0 } } },
                     .{
                         .value = .{ .bits = &.{ 0, 1 } },
                         .switches = &.{.{
-                            .lhs = .{ .name = "\\w_rdy" },
+                            .lhs = .{ .name = "\\w_rdy", .range = .{} },
                             .cases = &.{.{
                                 .value = .{ .bits = &.{1} },
                                 .assigns = &.{.{
-                                    .lhs = .{ .name = "$8" },
+                                    .lhs = .{ .name = "$8", .range = .{} },
                                     .rhs = .{ .constant = .{ .bits = &.{1} } },
                                 }},
                             }},
                         }},
                     },
                     .{ .value = .{ .bits = &.{ 1, 1 } }, .assigns = &.{
-                        .{ .lhs = .{ .name = "$8" }, .rhs = .{ .constant = .{ .bits = &.{0} } } },
+                        .{
+                            .lhs = .{ .name = "$8", .range = .{} },
+                            .rhs = .{ .constant = .{ .bits = &.{0} } },
+                        },
                     } },
                 },
             }, .{
-                .lhs = .{ .name = "\\rst" },
+                .lhs = .{ .name = "\\rst", .range = .{} },
                 .cases = &.{
                     .{
                         .value = .{ .bits = &.{1} },
                         .assigns = &.{.{
-                            .lhs = .{ .name = "$8" },
+                            .lhs = .{ .name = "$8", .range = .{} },
                             .rhs = .{ .cat = .{ .values = &.{
                                 .{ .constant = .{ .bits = &.{ 0, 0, 0, 0 } } },
                                 .{ .signal = .{ .name = "\\read__value", .range = .{ .upper = 15, .lower = 15 } } },
@@ -754,7 +761,7 @@ fn testModulePrint(allocator: Allocator) !void {
                 },
             } },
         }},
-    },
+    }} },
         \\attribute \generator "eri"
         \\attribute \top 1
         \\module \top
@@ -767,9 +774,9 @@ fn testModulePrint(allocator: Allocator) !void {
         \\  cell $dff $31
         \\    parameter \WIDTH 1
         \\    parameter \CLK_POLARITY 1
-        \\    connect \D $8 [0]
-        \\    connect \CLK \clk [0]
-        \\    connect \Q \w_en [0]
+        \\    connect \D $8
+        \\    connect \CLK \clk
+        \\    connect \Q \w_en
         \\  end
         \\  process $30
         \\    assign $8 [0] \w_en [0]
@@ -797,7 +804,7 @@ fn testModulePrint(allocator: Allocator) !void {
 }
 
 test "cell print" {
-    try expectOutputAndRoundtrip(std.testing.allocator, Cell{
+    try expectOutputAndRoundtrip(Cell, std.testing.allocator, Cell{
         .kind = "$memrd_v2",
         .name = "$70",
         .parameters = &.{
