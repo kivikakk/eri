@@ -8,3 +8,4 @@
 ** STRT rtlil parser.
 ** TODO rtlil parser string escapes
 ** TODO rtlil parser handle cat { ... }
+** TODO "zig build test" should collect all tests!
