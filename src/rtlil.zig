@@ -1,5 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const rtlil_parser = @import("rtlil_parser.zig");
+const common = @import("common.zig");
 
 pub fn output(writer: anytype, what: anytype) !void {
     var w = mkWriter(writer);
@@ -13,6 +15,8 @@ pub fn allocOutput(allocator: Allocator, what: anytype) ![]const u8 {
     return try out.toOwnedSlice(allocator);
 }
 
+pub const parse = rtlil_parser.parse;
+
 pub const Doc = struct {
     const Self = @This();
 
@@ -23,8 +27,7 @@ pub const Doc = struct {
     }
 
     pub fn deinit(self: Self, allocator: Allocator) void {
-        for (self.modules) |module| module.deinit(allocator);
-        allocator.free(self.modules);
+        common.deinit(allocator, self.modules);
     }
 };
 
@@ -40,8 +43,12 @@ pub const Module = struct {
     processes: []const Process = &.{},
 
     pub fn deinit(self: Self, allocator: Allocator) void {
-        for (self.wires) |wire| wire.deinit(allocator);
-        allocator.free(self.wires);
+        common.deinit(allocator, self.attributes);
+        allocator.free(self.name);
+        common.deinit(allocator, self.wires);
+        common.deinit(allocator, self.connections);
+        common.deinit(allocator, self.cells);
+        common.deinit(allocator, self.processes);
     }
 };
 
@@ -50,6 +57,11 @@ pub const Attribute = struct {
 
     name: []const u8,
     value: Value,
+
+    pub fn deinit(self: Self, allocator: Allocator) void {
+        allocator.free(self.name);
+        self.value.deinit(allocator);
+    }
 };
 
 pub const Memory = struct {
@@ -59,13 +71,19 @@ pub const Memory = struct {
     width: usize,
     size: usize,
     name: []const u8,
+
+    pub fn deinit(self: Self, allocator: Allocator) void {
+        common.deinit(allocator, self.attributes);
+        allocator.free(self.name);
+    }
 };
 
 pub const Wire = struct {
     const Self = @This();
 
-    const Spec = struct {
-        dir: enum { input, output, inout },
+    pub const Spec = struct {
+        pub const Dir = enum { input, output, inout };
+        dir: Dir,
         index: usize,
     };
 
@@ -86,6 +104,14 @@ pub const Cell = struct {
     name: []const u8,
     parameters: []const Parameter,
     connections: []const Connection,
+
+    pub fn deinit(self: Self, allocator: Allocator) void {
+        common.deinit(allocator, self.attributes);
+        allocator.free(self.kind);
+        allocator.free(self.name);
+        common.deinit(allocator, self.parameters);
+        common.deinit(allocator, self.connections);
+    }
 };
 
 pub const Parameter = struct {
@@ -93,14 +119,27 @@ pub const Parameter = struct {
 
     name: []const u8,
     value: Value,
+
+    pub fn deinit(self: Self, allocator: Allocator) void {
+        allocator.free(self.name);
+        self.value.deinit(allocator);
+    }
 };
 
 pub const Value = union(enum) {
     const Self = @This();
 
-    number: u64,
+    number: i64,
     string: []const u8,
     bv: Bitvector,
+
+    pub fn deinit(self: Self, allocator: Allocator) void {
+        switch (self) {
+            .number => {},
+            .string => |string| allocator.free(string),
+            .bv => |bv| bv.deinit(allocator),
+        }
+    }
 
     pub fn format(self: Self, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         switch (self) {
@@ -125,6 +164,11 @@ pub const Connection = struct {
 
     name: []const u8,
     target: RValue,
+
+    pub fn deinit(self: Self, allocator: Allocator) void {
+        allocator.free(self.name);
+        self.target.deinit(allocator);
+    }
 };
 
 pub const RValue = union(enum) {
@@ -133,6 +177,12 @@ pub const RValue = union(enum) {
     signal: Signal,
     constant: Bitvector,
     cat: Cat,
+
+    pub fn deinit(self: Self, allocator: Allocator) void {
+        switch (self) {
+            inline else => |payload| payload.deinit(allocator),
+        }
+    }
 
     pub fn format(
         self: Self,
@@ -152,6 +202,10 @@ pub const Signal = struct {
     name: []const u8,
     range: Range = .{},
 
+    pub fn deinit(self: Self, allocator: Allocator) void {
+        allocator.free(self.name);
+    }
+
     pub fn format(
         self: Self,
         comptime fmt: []const u8,
@@ -169,6 +223,10 @@ pub const Bitvector = struct {
     const Self = @This();
 
     bits: []const u1,
+
+    pub fn deinit(self: Self, allocator: Allocator) void {
+        allocator.free(self.bits);
+    }
 
     pub fn format(
         self: Self,
@@ -191,6 +249,10 @@ pub const Cat = struct {
     const Self = @This();
 
     values: []const RValue,
+
+    pub fn deinit(self: Self, allocator: Allocator) void {
+        common.deinit(allocator, self.values);
+    }
 
     pub fn format(
         self: Self,
@@ -228,10 +290,17 @@ pub const Range = struct {
 pub const Process = struct {
     const Self = @This();
 
-    attributes: []Attribute = &.{},
+    attributes: []const Attribute = &.{},
     name: []const u8,
     assigns: []const Assign = &.{},
     switches: []const Switch = &.{},
+
+    pub fn deinit(self: Self, allocator: Allocator) void {
+        common.deinit(allocator, self.attributes);
+        allocator.free(self.name);
+        common.deinit(allocator, self.assigns);
+        common.deinit(allocator, self.switches);
+    }
 };
 
 pub const Assign = struct {
@@ -239,6 +308,11 @@ pub const Assign = struct {
 
     lhs: Signal,
     rhs: RValue,
+
+    pub fn deinit(self: Self, allocator: Allocator) void {
+        self.lhs.deinit(allocator);
+        self.rhs.deinit(allocator);
+    }
 };
 
 pub const Switch = struct {
@@ -247,10 +321,22 @@ pub const Switch = struct {
     lhs: Signal,
     cases: []const Case,
 
+    pub fn deinit(self: Self, allocator: Allocator) void {
+        self.lhs.deinit(allocator);
+        common.deinit(allocator, self.cases);
+    }
+
     pub const Case = struct {
         value: ?Bitvector,
         assigns: []const Assign = &.{},
         switches: []const Switch = &.{},
+
+        pub fn deinit(self: Case, allocator: Allocator) void {
+            if (self.value) |value|
+                value.deinit(allocator);
+            common.deinit(allocator, self.assigns);
+            common.deinit(allocator, self.switches);
+        }
     };
 };
 
@@ -557,14 +643,25 @@ fn mkWriter(inner: anytype) Writer(@TypeOf(inner)) {
 //   end
 // <<
 
-fn expectOutput(arg: anytype, expected: []const u8) !void {
-    const out = try allocOutput(std.testing.allocator, arg);
-    defer std.testing.allocator.free(out);
+fn expectOutputAndRoundtrip(allocator: Allocator, arg: anytype, expected: []const u8) !void {
+    const out = try allocOutput(allocator, arg);
+    defer allocator.free(out);
     try std.testing.expectEqualStrings(expected, out);
+
+    const comp = try parse(@TypeOf(arg), allocator, out);
+    defer {
+        if (@hasDecl(@TypeOf(comp), "deinit"))
+            comp.deinit(allocator);
+    }
+    try std.testing.expectEqualDeep(arg, comp);
 }
 
-test "module print" {
-    try expectOutput(Module{
+test "module print - CAAF" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, testModulePrint, .{});
+}
+
+fn testModulePrint(allocator: Allocator) !void {
+    try expectOutputAndRoundtrip(allocator, Module{
         .attributes = &.{
             .{ .name = "\\generator", .value = .{ .string = "eri" } },
             .{ .name = "\\top", .value = .{ .number = 1 } },
@@ -700,7 +797,7 @@ test "module print" {
 }
 
 test "cell print" {
-    try expectOutput(Cell{
+    try expectOutputAndRoundtrip(std.testing.allocator, Cell{
         .kind = "$memrd_v2",
         .name = "$70",
         .parameters = &.{

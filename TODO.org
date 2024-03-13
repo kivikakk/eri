@@ -4,3 +4,6 @@
 ** DONE There's a few anyerrors around.
 ** TODO rtlil model feels a bit wonky (esp around Assign/Signal/RValue/Bitvector).
 ** DONE Drop AnyWriter usage.
+** TODO "writeAttributes" based on if the target type has attributes.
+** STRT rtlil parser.
+** TODO rtlil parser string escapes

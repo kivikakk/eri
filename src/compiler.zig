@@ -1,34 +1,13 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const parser = @import("parser.zig");
+const ast = @import("ast.zig");
 const rtlil = @import("rtlil.zig");
 
-const Register = struct {
-    const Self = @This();
-
-    name: []const u8,
-    width: usize,
-    init: []u1,
-
-    fn deinit(self: Self, allocator: Allocator) void {
-        allocator.free(self.name);
-        allocator.free(self.init);
-    }
-};
-
-pub const Compiler = struct {
-    const Self = @This();
-
-    const Error = error{Unexpected} || Allocator.Error;
-
-    allocator: Allocator,
-    registers: std.ArrayListUnmanaged(Register) = .{},
-
     pub fn compileBuffer(allocator: Allocator, input: []const u8) !rtlil.Doc {
-        var compiler = Self.mk(allocator);
+        var compiler = Compiler.mk(allocator);
         defer compiler.deinit();
 
-        const doc = try parser.parse(allocator, input);
+        const doc = try ast.parse(allocator, input);
         defer doc.deinit(allocator);
 
         for (doc.forms) |form| {
@@ -37,6 +16,14 @@ pub const Compiler = struct {
 
         return try compiler.finalise();
     }
+
+pub const Compiler = struct {
+    const Self = @This();
+
+    const Error = error{Unexpected} || Allocator.Error;
+
+    allocator: Allocator,
+    registers: std.ArrayListUnmanaged(Register) = .{},
 
     pub fn mk(allocator: Allocator) Self {
         return .{ .allocator = allocator };
@@ -47,7 +34,7 @@ pub const Compiler = struct {
         self.registers.deinit(self.allocator);
     }
 
-    fn nomTop(self: *Self, form: parser.Form) Error!void {
+    fn nomTop(self: *Self, form: ast.Form) Error!void {
         const els = switch (form.value) {
             .list => |forms| forms,
             else => return error.Unexpected,
@@ -69,7 +56,7 @@ pub const Compiler = struct {
         }
     }
 
-    fn nomReg(self: Self, args: []const parser.Form) Error!Register {
+    fn nomReg(self: Self, args: []const ast.Form) Error!Register {
         std.debug.assert(args.len >= 1);
 
         const name = try std.fmt.allocPrint(self.allocator, "\\{s}", .{args[0].value.label});
@@ -135,20 +122,41 @@ pub const Compiler = struct {
     }
 };
 
-fn compileTest(allocator: Allocator) !void {
-    const doc = try Compiler.compileBuffer(allocator, "(reg x 8 -2)");
+const Register = struct {
+    const Self = @This();
+
+    name: []const u8,
+    width: usize,
+    init: []u1,
+
+    fn deinit(self: Self, allocator: Allocator) void {
+        allocator.free(self.name);
+        allocator.free(self.init);
+    }
+};
+
+fn expectCompilesTo(allocator: Allocator, input: []const u8, il: []const u8) !void {
+    const doc = try compileBuffer(allocator, input);
     defer doc.deinit(allocator);
+
+    const expIl = try rtlil.parse(rtlil.Doc, allocator, il);
+    defer expIl.deinit(allocator);
 
     const output = try rtlil.allocOutput(allocator, doc);
     defer allocator.free(output);
 
-    std.debug.print("{s}\n", .{output});
-}
-
-test "compile" {
-    try compileTest(std.testing.allocator);
+    try std.testing.expectEqualDeep(expIl, doc);
 }
 
 test "compile - CAAF" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, compileTest, .{});
 }
+
+fn compileTest(allocator: Allocator) !void {
+    try expectCompilesTo(allocator, "(reg x 8 -2)",
+        \\module top
+        \\  wire width 8 \x
+        \\end
+    );
+}
+

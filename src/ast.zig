@@ -1,5 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const common = @import("common.zig");
 
 pub const Loc = struct {
     const Self = @This();
@@ -70,7 +71,11 @@ fn expectRoundtrip(allocator: Allocator, input0: []const u8) !void {
     try std.testing.expectEqualStrings(input1, input2);
 }
 
-fn roundtrips(allocator: Allocator) !void {
+test "roundtrips - CAAF" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, testRoundtrips, .{});
+}
+
+fn testRoundtrips(allocator: Allocator) !void {
     try expectRoundtrip(allocator, "(abc (def))");
     try expectRoundtrip(allocator, "   123  8 \n\t  x");
     try expectRoundtrip(allocator, "((((((((((((((((((((((()))))))))))))))))))))))");
@@ -78,14 +83,6 @@ fn roundtrips(allocator: Allocator) !void {
         \\ (x ; ... yeah )
         \\  y)
     );
-}
-
-test "parse" {
-    try roundtrips(std.testing.allocator);
-}
-
-test "parse - CAAF" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, roundtrips, .{});
 }
 
 pub const Doc = struct {
@@ -332,8 +329,8 @@ const Token = struct {
             _ = options;
 
             switch (self) {
-                .number => |n| try std.fmt.format(writer, "number {}", .{n}),
-                .label => |l| try std.fmt.format(writer, "label {s}", .{l}),
+                .number => |number| try std.fmt.format(writer, "number {}", .{number}),
+                .label => |label| try std.fmt.format(writer, "label {s}", .{label}),
                 .popen => try writer.writeAll("popen"),
                 .pclose => try writer.writeAll("pclose"),
             }
@@ -426,17 +423,17 @@ const Token = struct {
         var loc: Loc = .{};
 
         var tokens = std.ArrayListUnmanaged(Self){};
-        errdefer {
-            for (tokens.items) |token| token.deinit(allocator);
-            tokens.deinit(allocator);
-        }
+        errdefer common.deinit(allocator, &tokens);
 
         while (true) {
             const result = Self.nextFromBuffer(allocator, buffer, offset, loc) catch |err| switch (err) {
                 error.Empty => break,
                 else => return err,
             };
-            try tokens.append(allocator, result.token);
+            {
+                errdefer result.token.deinit(allocator);
+                try tokens.append(allocator, result.token);
+            }
             offset = result.next_offset;
             loc = result.next_loc;
         }
@@ -478,7 +475,7 @@ const Token = struct {
         return Self.mkResult(.{ .label = try allocator.dupe(u8, label) }, start, end, next_offset, next_loc);
     }
 
-    fn deinit(self: Self, allocator: Allocator) void {
+    pub fn deinit(self: Self, allocator: Allocator) void {
         switch (self.value) {
             .label => |l| allocator.free(l),
             else => {},

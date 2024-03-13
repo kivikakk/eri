@@ -2,8 +2,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const rtlil = @import("./rtlil.zig");
-const parser = @import("./parser.zig");
-const Compiler = @import("./compiler.zig").Compiler;
+const ast = @import("./ast.zig");
+const compiler = @import("./compiler.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -14,7 +14,7 @@ pub fn main() !void {
     const input = try std.io.getStdIn().readToEndAlloc(alloc, 1048576);
     defer alloc.free(input);
 
-    const il = try Compiler.compileBuffer(alloc, input);
+    const il = try compiler.compileBuffer(alloc, input);
     defer il.deinit(alloc);
 
     try rtlil.output(std.io.getStdOut().writer(), il);
