@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const rtlil_parser = @import("rtlil_parser.zig");
 const common = @import("common.zig");
+const Parser = @import("rtlil_parser.zig").Parser;
 
 pub fn output(writer: anytype, what: anytype) !void {
     var w = mkWriter(writer);
@@ -21,6 +22,11 @@ pub const Doc = struct {
     const Self = @This();
 
     modules: []const Module,
+
+    pub fn parse(allocator: Allocator, buffer: []const u8) Parser.Error!Self {
+        var parser = Parser.mk(allocator, buffer);
+        return Self.fromModules(try parser.parse());
+    }
 
     pub fn fromModules(modules: []Module) Self {
         return Self{ .modules = modules };
@@ -45,6 +51,7 @@ pub const Module = struct {
     pub fn deinit(self: Self, allocator: Allocator) void {
         common.deinit(allocator, self.attributes);
         allocator.free(self.name);
+        common.deinit(allocator, self.memories);
         common.deinit(allocator, self.wires);
         common.deinit(allocator, self.connections);
         common.deinit(allocator, self.cells);
@@ -227,6 +234,10 @@ pub const Bitvector = struct {
 
     bits: []const u1,
 
+    pub fn dupe(self: Self, allocator: Allocator) Allocator.Error!Self {
+        return .{ .bits = try allocator.dupe(u1, self.bits) };
+    }
+
     pub fn deinit(self: Self, allocator: Allocator) void {
         allocator.free(self.bits);
     }
@@ -248,7 +259,7 @@ pub const Bitvector = struct {
     }
 };
 
-pub const Cat = struct {
+pub const Cat = struct { // meow :"3
     const Self = @This();
 
     values: []const RValue,
@@ -646,12 +657,12 @@ fn mkWriter(inner: anytype) Writer(@TypeOf(inner)) {
 //   end
 // <<
 
-fn expectOutputAndRoundtrip(comptime T: type, allocator: Allocator, arg: T, expected: []const u8) !void {
+fn expectOutputAndRoundtrip(allocator: Allocator, arg: Doc, expected: []const u8) !void {
     const out = try allocOutput(allocator, arg);
     defer allocator.free(out);
     try std.testing.expectEqualStrings(expected, out);
 
-    const comp = try parse(T, allocator, out);
+    const comp = try Doc.parse(allocator, out);
     defer common.deinit(allocator, comp);
 
     try std.testing.expectEqualDeep(arg, comp);
@@ -662,7 +673,7 @@ test "module print - CAAF" {
 }
 
 fn testModulePrint(allocator: Allocator) !void {
-    try expectOutputAndRoundtrip(Doc, allocator, .{ .modules = &.{.{
+    try expectOutputAndRoundtrip(allocator, .{ .modules = &.{.{
         .attributes = &.{
             .{ .name = "\\generator", .value = .{ .string = "eri" } },
             .{ .name = "\\top", .value = .{ .number = 1 } },
@@ -683,7 +694,7 @@ fn testModulePrint(allocator: Allocator) !void {
         .connections = &.{.{ .name = "\\i2c_bus__busy", .target = .{
             .signal = .{ .name = "\\led_0__o", .range = .{} },
         } }},
-        .cells = &.{.{
+        .cells = &.{ .{
             .attributes = &.{
                 .{ .name = "\\src", .value = .{ .string = "module print test again" } },
             },
@@ -704,7 +715,21 @@ fn testModulePrint(allocator: Allocator) !void {
                     .name = "\\w_en",
                 } } },
             },
-        }},
+        }, .{
+            .kind = "$memrd_v2",
+            .name = "$70",
+            .parameters = &.{
+                .{ .name = "\\MEMID", .value = .{ .string = "\\storage" } },
+                .{ .name = "\\WIDTH", .value = .{ .number = 8 } },
+                .{ .name = "\\ABITS", .value = .{ .number = 5 } },
+            },
+            .connections = &.{ .{ .name = "\\ADDR", .target = .{ .signal = .{
+                .name = "$signature__addr$18",
+                .range = .{ .upper = 4 },
+            } } }, .{ .name = "\\ARST", .target = .{ .constant = .{
+                .bits = &.{0},
+            } } } },
+        } },
         .processes = &.{.{
             .name = "$30",
             .assigns = &.{.{
@@ -778,6 +803,13 @@ fn testModulePrint(allocator: Allocator) !void {
         \\    connect \CLK \clk
         \\    connect \Q \w_en
         \\  end
+        \\  cell $memrd_v2 $70
+        \\    parameter \MEMID "\\storage"
+        \\    parameter \WIDTH 8
+        \\    parameter \ABITS 5
+        \\    connect \ADDR $signature__addr$18 [4:0]
+        \\    connect \ARST 1'0
+        \\  end
         \\  process $30
         \\    assign $8 [0] \w_en [0]
         \\    switch \fsm_state [1:0]
@@ -798,33 +830,6 @@ fn testModulePrint(allocator: Allocator) !void {
         \\      case
         \\    end
         \\  end
-        \\end
-        \\
-    );
-}
-
-test "cell print" {
-    try expectOutputAndRoundtrip(Cell, std.testing.allocator, Cell{
-        .kind = "$memrd_v2",
-        .name = "$70",
-        .parameters = &.{
-            .{ .name = "\\MEMID", .value = .{ .string = "\\storage" } },
-            .{ .name = "\\WIDTH", .value = .{ .number = 8 } },
-            .{ .name = "\\ABITS", .value = .{ .number = 5 } },
-        },
-        .connections = &.{ .{ .name = "\\ADDR", .target = .{ .signal = .{
-            .name = "$signature__addr$18",
-            .range = .{ .upper = 4 },
-        } } }, .{ .name = "\\ARST", .target = .{ .constant = .{
-            .bits = &.{0},
-        } } } },
-    },
-        \\cell $memrd_v2 $70
-        \\  parameter \MEMID "\\storage"
-        \\  parameter \WIDTH 8
-        \\  parameter \ABITS 5
-        \\  connect \ADDR $signature__addr$18 [4:0]
-        \\  connect \ARST 1'0
         \\end
         \\
     );

@@ -3,16 +3,7 @@ const Allocator = std.mem.Allocator;
 const rtlil = @import("rtlil.zig");
 const common = @import("common.zig");
 
-pub fn parse(comptime T: type, allocator: Allocator, buffer: []const u8) Parser.Error!T {
-    var parser = Parser.mk(allocator, buffer);
-    return switch (T) {
-        rtlil.Doc => .{ .modules = try parser.parse() },
-        rtlil.Cell => try parser.parseCell("kind", "name", &.{}),
-        else => @compileError("no parse() for " ++ @typeName(T)),
-    };
-}
-
-const Parser = struct {
+pub const Parser = struct {
     const Self = @This();
 
     pub const Error = error{
@@ -23,62 +14,53 @@ const Parser = struct {
     allocator: Allocator,
     line_it: std.mem.TokenIterator(u8, .scalar),
 
-    fn mk(allocator: Allocator, buffer: []const u8) Self {
+    pub fn mk(allocator: Allocator, buffer: []const u8) Self {
         return Self{
             .allocator = allocator,
             .line_it = std.mem.tokenizeScalar(u8, buffer, '\n'),
         };
     }
 
-    fn parse(self: *Self) Error![]rtlil.Module {
+    pub fn parse(self: *Self) Error![]rtlil.Module {
         var modules = std.ArrayListUnmanaged(rtlil.Module){};
+        errdefer common.deinit(self.allocator, &modules);
 
         var attributes = std.ArrayListUnmanaged(rtlil.Attribute){};
         var name: ?[]const u8 = null;
         var module_attributes: []rtlil.Attribute = &.{};
-        var wires = std.ArrayListUnmanaged(rtlil.Wire){};
         var memories = std.ArrayListUnmanaged(rtlil.Memory){};
+        var wires = std.ArrayListUnmanaged(rtlil.Wire){};
         var connects = std.ArrayListUnmanaged(rtlil.Connection){};
         var cells = std.ArrayListUnmanaged(rtlil.Cell){};
         var processes = std.ArrayListUnmanaged(rtlil.Process){};
-
         errdefer {
-            common.deinit(self.allocator, &modules);
             common.deinit(self.allocator, &attributes);
             common.deinit(self.allocator, module_attributes);
             if (name) |n|
                 self.allocator.free(n);
-            common.deinit(self.allocator, &wires);
             common.deinit(self.allocator, &memories);
+            common.deinit(self.allocator, &wires);
             common.deinit(self.allocator, &connects);
             common.deinit(self.allocator, &cells);
             common.deinit(self.allocator, &processes);
         }
 
-        while (true) {
-            const line = try self.parseLine();
-            errdefer line.deinit(self.allocator);
-
+        while (try self.parseLine()) |line| {
             switch (line) {
                 .attribute => |props| {
+                    errdefer line.deinit(self.allocator);
                     try attributes.append(self.allocator, .{
                         .name = props.name,
                         .value = props.value,
                     });
                 },
                 .module => |props| {
+                    errdefer line.deinit(self.allocator);
                     name = props.name;
                     module_attributes = try attributes.toOwnedSlice(self.allocator);
                 },
-                .wire => |props| {
-                    std.debug.assert(attributes.items.len == 0);
-                    try wires.append(self.allocator, .{
-                        .width = props.width,
-                        .spec = props.spec,
-                        .name = props.name,
-                    });
-                },
                 .memory => |props| {
+                    errdefer line.deinit(self.allocator);
                     const memory_attributes = try attributes.toOwnedSlice(self.allocator);
                     errdefer common.deinit(self.allocator, memory_attributes);
                     try memories.append(self.allocator, .{
@@ -88,7 +70,17 @@ const Parser = struct {
                         .name = props.name,
                     });
                 },
+                .wire => |props| {
+                    errdefer line.deinit(self.allocator);
+                    std.debug.assert(attributes.items.len == 0);
+                    try wires.append(self.allocator, .{
+                        .width = props.width,
+                        .spec = props.spec,
+                        .name = props.name,
+                    });
+                },
                 .connect => |props| {
+                    errdefer line.deinit(self.allocator);
                     std.debug.assert(attributes.items.len == 0);
                     try connects.append(self.allocator, .{
                         .name = props.name,
@@ -96,20 +88,53 @@ const Parser = struct {
                     });
                 },
                 .cell => |props| {
-                    const cell_attributes = try attributes.toOwnedSlice(self.allocator);
-                    errdefer common.deinit(self.allocator, cell_attributes);
-                    // XXX errdefer and cell_attributes ownership isn't right.
-                    const cell = try self.parseCell(props.kind, props.name, cell_attributes);
+                    const cell = cell: {
+                        errdefer line.deinit(self.allocator);
+                        const cell_attributes = try attributes.toOwnedSlice(self.allocator);
+                        // parseCell takes ownership of cell_attributes immediately.
+                        break :cell try self.parseCell(props.kind, props.name, cell_attributes);
+                    };
                     errdefer cell.deinit(self.allocator);
                     try cells.append(self.allocator, cell);
                 },
                 .process => |props| {
-                    const process_attributes = try attributes.toOwnedSlice(self.allocator);
-                    errdefer common.deinit(self.allocator, process_attributes);
-                    // XXX as above?
-                    const process = try self.parseProcess(props.name, process_attributes);
+                    const process = process: {
+                        errdefer line.deinit(self.allocator);
+                        const process_attributes = try attributes.toOwnedSlice(self.allocator);
+                        // as above.
+                        break :process try self.parseProcess(props.name, process_attributes);
+                    };
                     errdefer process.deinit(self.allocator);
                     try processes.append(self.allocator, process);
+                },
+                .end => {
+                    errdefer line.deinit(self.allocator);
+                    std.debug.assert(attributes.items.len == 0);
+                    std.debug.assert(name != null);
+
+                    const o_memories = try memories.toOwnedSlice(self.allocator);
+                    errdefer common.deinit(self.allocator, o_memories);
+                    const o_wires = try wires.toOwnedSlice(self.allocator);
+                    errdefer common.deinit(self.allocator, o_wires);
+                    const o_connections = try connects.toOwnedSlice(self.allocator);
+                    errdefer common.deinit(self.allocator, o_connections);
+                    const o_cells = try cells.toOwnedSlice(self.allocator);
+                    errdefer common.deinit(self.allocator, o_cells);
+                    const o_processes = try processes.toOwnedSlice(self.allocator);
+                    errdefer common.deinit(self.allocator, o_processes);
+
+                    try modules.append(self.allocator, .{
+                        .attributes = module_attributes,
+                        .name = name.?,
+                        .memories = o_memories,
+                        .wires = o_wires,
+                        .connections = o_connections,
+                        .cells = o_cells,
+                        .processes = o_processes,
+                    });
+
+                    name = null;
+                    module_attributes = &.{};
                 },
                 else => std.debug.panic("unexpected while parsing module: .{}\n", .{line}),
             }
@@ -117,18 +142,18 @@ const Parser = struct {
 
         std.debug.assert(attributes.items.len == 0);
         std.debug.assert(name == null);
-        std.debug.assert(module_attributes.items.len == 0);
-        std.debug.assert(wires.items.len == 0);
+        std.debug.assert(module_attributes.len == 0);
         std.debug.assert(memories.items.len == 0);
+        std.debug.assert(wires.items.len == 0);
         std.debug.assert(connects.items.len == 0);
         std.debug.assert(cells.items.len == 0);
         std.debug.assert(processes.items.len == 0);
 
-        return modules;
+        return modules.toOwnedSlice(self.allocator);
     }
 
-    fn parseLine(self: *Self) Error!Line {
-        const next = self.line_it.next() orelse return error.Empty;
+    fn parseLine(self: *Self) Error!?Line {
+        const next = self.line_it.next() orelse return null;
         return try Line.parse(self.allocator, next);
     }
 
@@ -140,14 +165,13 @@ const Parser = struct {
     ) Error!rtlil.Cell {
         var parameters = std.ArrayListUnmanaged(rtlil.Parameter){};
         var connects = std.ArrayListUnmanaged(rtlil.Connection){};
-
         errdefer {
-            common.deinit(self.allocator, parameters);
-            common.deinit(self.allocator, connects);
+            common.deinit(self.allocator, &parameters);
+            common.deinit(self.allocator, &connects);
+            common.deinit(self.allocator, attributes);
         }
 
-        while (true) {
-            const line = try self.parseLine();
+        while (try self.parseLine()) |line| {
             errdefer line.deinit(self.allocator);
 
             switch (line) {
@@ -175,6 +199,8 @@ const Parser = struct {
                 else => std.debug.panic("unexpected while parsing cell: {}\n", .{line}),
             }
         }
+
+        return error.Invalid;
     }
 
     fn parseProcess(
@@ -184,27 +210,32 @@ const Parser = struct {
     ) Error!rtlil.Process {
         var assigns = std.ArrayListUnmanaged(rtlil.Assign){};
         var switches = std.ArrayListUnmanaged(rtlil.Switch){};
-
         errdefer {
-            common.deinit(self.allocator, assigns);
-            common.deinit(self.allocator, switches);
+            common.deinit(self.allocator, &assigns);
+            common.deinit(self.allocator, &switches);
+            common.deinit(self.allocator, attributes);
         }
 
-        while (true) {
-            const line = try self.parseLine();
-            errdefer line.deinit(self.allocator);
-
+        while (try self.parseLine()) |line| {
             switch (line) {
-                .assign => |props| try assigns.append(self.allocator, .{
-                    .lhs = props.lhs,
-                    .rhs = props.rhs,
-                }),
+                .assign => |props| {
+                    errdefer line.deinit(self.allocator);
+                    try assigns.append(self.allocator, .{
+                        .lhs = props.lhs,
+                        .rhs = props.rhs,
+                    });
+                },
                 .switch_ => |props| {
-                    const switch_ = try self.parseSwitch(props.lhs);
+                    const switch_ = switch_: {
+                        errdefer line.deinit(self.allocator);
+                        break :switch_ try self.parseSwitch(props.lhs);
+                    };
                     errdefer switch_.deinit(self.allocator);
                     try switches.append(self.allocator, switch_);
                 },
                 .end => {
+                    errdefer line.deinit(self.allocator);
+
                     const o_assigns = try assigns.toOwnedSlice(self.allocator);
                     errdefer common.deinit(self.allocator, o_assigns);
                     const o_switches = try switches.toOwnedSlice(self.allocator);
@@ -219,24 +250,61 @@ const Parser = struct {
                 else => std.debug.panic("unhandled while parsing process: {}\n", .{line}),
             }
         }
+
+        return error.Invalid;
     }
 
     fn parseSwitch(self: *Self, lhs: rtlil.Signal) Error!rtlil.Switch {
         var cases = std.ArrayListUnmanaged(rtlil.Switch.Case){};
-        errdefer common.deinit(self.allocator, cases);
+        errdefer common.deinit(self.allocator, &cases);
 
         var case: ?rtlil.Switch.Case = null;
         errdefer if (case) |c| c.deinit(self.allocator);
-
-        while (true) {
-            const line = try self.parseLine();
-            errdefer line.deinit(self.allocator);
-
-            cases = cases;
-            case = case;
-            _ = lhs;
-            unreachable;
+        var assigns = std.ArrayListUnmanaged(rtlil.Assign){};
+        var switches = std.ArrayListUnmanaged(rtlil.Switch){};
+        errdefer {
+            common.deinit(self.allocator, &assigns);
+            common.deinit(self.allocator, &switches);
         }
+
+        while (try self.parseLine()) |line| {
+            if ((line == .case or line == .end) and case != null) {
+                errdefer line.deinit(self.allocator);
+                case.?.assigns = try assigns.toOwnedSlice(self.allocator);
+                case.?.switches = try switches.toOwnedSlice(self.allocator);
+                try cases.append(self.allocator, case.?);
+                case = null;
+            }
+
+            switch (line) {
+                .case => |props| {
+                    errdefer line.deinit(self.allocator);
+                    case = .{ .value = props.value };
+                },
+                .assign => |props| {
+                    errdefer line.deinit(self.allocator);
+                    try assigns.append(self.allocator, .{
+                        .lhs = props.lhs,
+                        .rhs = props.rhs,
+                    });
+                },
+                .switch_ => |props| {
+                    const switch_ = switch_: {
+                        errdefer line.deinit(self.allocator);
+                        break :switch_ try self.parseSwitch(props.lhs);
+                    };
+                    errdefer switch_.deinit(self.allocator);
+                    try switches.append(self.allocator, switch_);
+                },
+                .end => {
+                    errdefer line.deinit(self.allocator);
+                    return .{ .lhs = lhs, .cases = try cases.toOwnedSlice(self.allocator) };
+                },
+                else => std.debug.panic("unhandled while parsing switch: {}\n", .{line}),
+            }
+        }
+
+        return error.Invalid;
     }
 };
 
@@ -285,8 +353,7 @@ const Line = union(enum) {
     fn parse(allocator: Allocator, line: []const u8) Parser.Error!Self {
         var tokens = try Token.iteratorFromBuffer(allocator, line);
         defer tokens.deinit(allocator);
-
-        std.debug.print("handling: \"{s}\"\n", .{line});
+        errdefer tokens.deinitErr();
 
         const kind = tokens.next().bareword;
 
@@ -353,7 +420,7 @@ const Line = union(enum) {
             const value = value: {
                 if (tokens.peek()) |peek| {
                     _ = tokens.next();
-                    break :value peek.bv;
+                    break :value try peek.bv.dupe(allocator);
                 }
                 break :value null;
             };
@@ -395,10 +462,26 @@ const Line = union(enum) {
             .bareword => return .{ .signal = try Self.parseSignal(allocator, tokens) },
             .bv => |bv| {
                 _ = tokens.next();
-                return .{ .constant = bv };
+                return .{ .constant = try bv.dupe(allocator) };
             },
             .copen => {
-                @panic("big todo"); // TODO
+                // it's rvalues all the way down, deary
+                _ = tokens.next();
+
+                var values = std.ArrayListUnmanaged(rtlil.RValue){};
+                errdefer common.deinit(allocator, &values);
+
+                while (true) {
+                    if (tokens.peek().? == .cclose) break;
+
+                    const value = try Self.parseRValue(allocator, tokens);
+                    errdefer value.deinit(allocator);
+                    try values.append(allocator, value);
+                }
+
+                _ = tokens.next();
+
+                return .{ .cat = .{ .values = try values.toOwnedSlice(allocator) } };
             },
             else => std.debug.panic("unhandled rtlil rvalue: {}\n", .{peek}),
         }
@@ -409,7 +492,6 @@ const Token = union(enum) {
     const Self = @This();
 
     const Error = error{
-        Empty,
         Invalid,
     } || Allocator.Error;
 
@@ -426,12 +508,14 @@ const Token = union(enum) {
         next_offset: usize,
     };
 
-    fn nextFromBuffer(allocator: Allocator, buffer: []const u8, offset: usize) Error!NextResult {
+    fn nextFromBuffer(allocator: Allocator, buffer: []const u8, offset: usize) Error!?NextResult {
+        const StringState = struct { start: usize, escapes: usize };
         var state: union(enum) {
             initial,
             number: usize,
             bareword: usize,
-            string: usize,
+            string: StringState,
+            string_escape: StringState,
             range_open: usize,
             range_upper: usize,
             range_lower: usize,
@@ -444,8 +528,10 @@ const Token = union(enum) {
                     ' ', '\t', '\r' => {},
                     '-', '0'...'9' => state = .{ .number = i },
                     'a'...'z', 'A'...'Z', '$', '\\' => state = .{ .bareword = i },
-                    '"' => state = .{ .string = i },
+                    '"' => state = .{ .string = .{ .start = i, .escapes = 0 } },
                     '[' => state = .{ .range_open = i },
+                    '{' => return .{ .token = .copen, .next_offset = i + 1 },
+                    '}' => return .{ .token = .cclose, .next_offset = i + 1 },
                     else => return error.Invalid,
                 },
                 .number => |s| switch (c) {
@@ -459,11 +545,20 @@ const Token = union(enum) {
                     ' ' => return try Self.mkBareword(allocator, buffer[s..i], i),
                     else => return error.Invalid,
                 },
-                .string => |s| switch (c) {
-                    '"' => return try Self.mkString(allocator, buffer[s + 1 .. i], i + 1),
-                    '\\' => return error.Invalid, // XXX escapes (if any?) unhandled
+                .string => |props| switch (c) {
+                    '"' => return try Self.mkString(
+                        allocator,
+                        buffer[props.start + 1 .. i],
+                        props.escapes,
+                        i + 1,
+                    ),
+                    '\\' => state = .{ .string_escape = props },
                     else => {},
                 },
+                .string_escape => |props| state = .{ .string = .{
+                    .start = props.start,
+                    .escapes = props.escapes + 1,
+                } },
                 .range_open => |s| switch (c) {
                     '0'...'9' => state = .{ .range_upper = s },
                     else => return error.Invalid,
@@ -488,7 +583,7 @@ const Token = union(enum) {
         }
 
         return switch (state) {
-            .initial => error.Empty,
+            .initial => null,
             .number => |s| return try Self.mkNumber(buffer[s..], buffer.len),
             .bareword => |s| return try Self.mkBareword(allocator, buffer[s..], buffer.len),
             .string => {
@@ -506,15 +601,9 @@ const Token = union(enum) {
         var tokens = std.ArrayListUnmanaged(Self){};
         errdefer common.deinit(allocator, &tokens);
 
-        while (true) {
-            var result = Self.nextFromBuffer(allocator, buffer, offset) catch |err| switch (err) {
-                error.Empty => break,
-                else => return err,
-            };
-            {
-                errdefer result.token.deinit(allocator);
-                try tokens.append(allocator, result.token);
-            }
+        while (try Self.nextFromBuffer(allocator, buffer, offset)) |*result| {
+            errdefer result.token.deinit(allocator);
+            try tokens.append(allocator, result.token);
             offset = result.next_offset;
         }
 
@@ -543,6 +632,11 @@ const Token = union(enum) {
             return self.tokens[self.offset];
         }
 
+        fn deinitErr(self: *Iterator) void {
+            // we're erroring out, so we don't want to trip the deinit assert.
+            self.remaining = 0;
+        }
+
         fn deinit(self: *Iterator, allocator: Allocator) void {
             std.debug.assert(self.remaining == 0);
             common.deinit(allocator, self.tokens);
@@ -563,8 +657,22 @@ const Token = union(enum) {
         return .{ .token = .{ .bareword = bareword }, .next_offset = next_offset };
     }
 
-    fn mkString(allocator: Allocator, slice: []const u8, next_offset: usize) Error!NextResult {
-        const string = try allocator.dupe(u8, slice);
+    fn mkString(allocator: Allocator, slice: []const u8, escapes: usize, next_offset: usize) Error!NextResult {
+        const string = try allocator.alloc(u8, slice.len - escapes);
+        var escape = false;
+        var i: usize = 0;
+        for (slice) |c| {
+            if (escape) {
+                string[i] = c;
+                escape = false;
+                i += 1;
+            } else if (c == '\\') {
+                escape = true;
+            } else {
+                string[i] = c;
+                i += 1;
+            }
+        }
         return .{ .token = .{ .string = string }, .next_offset = next_offset };
     }
 
@@ -600,8 +708,8 @@ const Token = union(enum) {
         };
     }
 
-    pub fn deinit(self: *Self, allocator: Allocator) void {
-        switch (self.*) {
+    pub fn deinit(self: Self, allocator: Allocator) void {
+        switch (self) {
             .number => {},
             .bareword => |bareword| allocator.free(bareword),
             .string => |string| allocator.free(string),
@@ -632,7 +740,7 @@ fn expectNextFromBuffer(
     buffer: []const u8,
     offset: usize,
 ) !void {
-    var result = try Token.nextFromBuffer(std.testing.allocator, buffer, offset);
+    var result = (try Token.nextFromBuffer(std.testing.allocator, buffer, offset)).?;
     defer result.token.deinit(std.testing.allocator);
     try std.testing.expectEqualDeep(expectedToken, result.token);
 }
