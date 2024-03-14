@@ -127,6 +127,11 @@ const Parser = struct {
         return modules;
     }
 
+    fn parseLine(self: *Self) Error!Line {
+        const next = self.line_it.next() orelse return error.Empty;
+        return try Line.parse(self.allocator, next);
+    }
+
     fn parseCell(
         self: *Self,
         kind: []const u8,
@@ -190,6 +195,15 @@ const Parser = struct {
             errdefer line.deinit(self.allocator);
 
             switch (line) {
+                .assign => |props| try assigns.append(self.allocator, .{
+                    .lhs = props.lhs,
+                    .rhs = props.rhs,
+                }),
+                .switch_ => |props| {
+                    const switch_ = try self.parseSwitch(props.lhs);
+                    errdefer switch_.deinit(self.allocator);
+                    try switches.append(self.allocator, switch_);
+                },
                 .end => {
                     const o_assigns = try assigns.toOwnedSlice(self.allocator);
                     errdefer common.deinit(self.allocator, o_assigns);
@@ -207,9 +221,22 @@ const Parser = struct {
         }
     }
 
-    fn parseLine(self: *Self) Error!Line {
-        const next = self.line_it.next() orelse return error.Empty;
-        return try Line.parse(self.allocator, next);
+    fn parseSwitch(self: *Self, lhs: rtlil.Signal) Error!rtlil.Switch {
+        var cases = std.ArrayListUnmanaged(rtlil.Switch.Case){};
+        errdefer common.deinit(self.allocator, cases);
+
+        var case: ?rtlil.Switch.Case = null;
+        errdefer if (case) |c| c.deinit(self.allocator);
+
+        while (true) {
+            const line = try self.parseLine();
+            errdefer line.deinit(self.allocator);
+
+            cases = cases;
+            case = case;
+            _ = lhs;
+            unreachable;
+        }
     }
 };
 
@@ -225,6 +252,9 @@ const Line = union(enum) {
     cell: struct { kind: []const u8, name: []const u8 },
     parameter: struct { name: []const u8, value: rtlil.Value },
     process: struct { name: []const u8 },
+    assign: struct { lhs: rtlil.Signal, rhs: rtlil.RValue },
+    switch_: struct { lhs: rtlil.Signal },
+    case: struct { value: ?rtlil.Bitvector },
     end,
 
     fn deinit(self: Self, allocator: Allocator) void {
@@ -242,6 +272,12 @@ const Line = union(enum) {
                 allocator.free(props.kind);
                 allocator.free(props.name);
             },
+            .assign => |props| {
+                props.lhs.deinit(allocator);
+                props.rhs.deinit(allocator);
+            },
+            .switch_ => |props| props.lhs.deinit(allocator),
+            .case => |props| if (props.value) |value| value.deinit(allocator),
             .end => {},
         }
     }
@@ -287,7 +323,10 @@ const Line = union(enum) {
             const name = try allocator.dupe(u8, tokens.next().bareword);
             return .{ .wire = .{ .name = name, .width = width, .spec = spec } };
         } else if (std.mem.eql(u8, kind, "connect")) {
-            return Self.parseConnect(allocator, &tokens);
+            const name = try allocator.dupe(u8, tokens.next().bareword);
+            errdefer allocator.free(name);
+            const target = try Self.parseRValue(allocator, &tokens);
+            return .{ .connect = .{ .name = name, .target = target } };
         } else if (std.mem.eql(u8, kind, "cell")) {
             const cell_kind = try allocator.dupe(u8, tokens.next().bareword);
             errdefer allocator.free(cell_kind);
@@ -303,8 +342,22 @@ const Line = union(enum) {
         } else if (std.mem.eql(u8, kind, "process")) {
             return .{ .process = .{ .name = try allocator.dupe(u8, tokens.next().bareword) } };
         } else if (std.mem.eql(u8, kind, "assign")) {
-            @panic("NYI");
-            // return .{ .assign = .{ .lhs = lhs, .rhs = rhs } };
+            const lhs = try Self.parseSignal(allocator, &tokens);
+            errdefer lhs.deinit(allocator);
+            const rhs = try Self.parseRValue(allocator, &tokens);
+            return .{ .assign = .{ .lhs = lhs, .rhs = rhs } };
+        } else if (std.mem.eql(u8, kind, "switch")) {
+            const lhs = try Self.parseSignal(allocator, &tokens);
+            return .{ .switch_ = .{ .lhs = lhs } };
+        } else if (std.mem.eql(u8, kind, "case")) {
+            const value = value: {
+                if (tokens.peek()) |peek| {
+                    _ = tokens.next();
+                    break :value peek.bv;
+                }
+                break :value null;
+            };
+            return .{ .case = .{ .value = value } };
         } else {
             std.debug.panic("unhandled rtlil keyword: {s}\n", .{kind});
         }
@@ -320,35 +373,36 @@ const Line = union(enum) {
         };
     }
 
-    fn parseConnect(allocator: Allocator, tokens: *Token.Iterator) Parser.Error!Self {
+    fn parseSignal(allocator: Allocator, tokens: *Token.Iterator) Parser.Error!rtlil.Signal {
         const name = try allocator.dupe(u8, tokens.next().bareword);
         errdefer allocator.free(name);
-        const target: rtlil.RValue = rvalue: {
-            const next = tokens.next();
-            switch (next) {
-                .bareword => |bareword| {
-                    // m h trailing range, m n
-                    const rname = try allocator.dupe(u8, bareword);
-                    const range = range: {
-                        if (tokens.remaining == 0)
-                            break :range null;
-                        break :range tokens.next().range;
-                    };
-                    break :rvalue .{ .signal = .{ .name = rname, .range = range } };
+        const range: ?rtlil.Range = range: {
+            const peek = tokens.peek() orelse break :range null;
+            switch (peek) {
+                .range => |range| {
+                    _ = tokens.next();
+                    break :range range;
                 },
-                .bv => |bv| {
-                    break :rvalue .{ .constant = bv };
-                },
-                .copen => {
-                    @panic("big todo"); // TODO
-                },
-                else => std.debug.panic("unhandled rtlil rvalue: {}\n", .{next}),
+                else => break :range null,
             }
         };
-        return .{ .connect = .{ .name = name, .target = target } };
+        return .{ .name = name, .range = range };
     }
 
-    // fn parseSignal(allocator: Allocator, )
+    fn parseRValue(allocator: Allocator, tokens: *Token.Iterator) Parser.Error!rtlil.RValue {
+        const peek = tokens.peek().?;
+        switch (peek) {
+            .bareword => return .{ .signal = try Self.parseSignal(allocator, tokens) },
+            .bv => |bv| {
+                _ = tokens.next();
+                return .{ .constant = bv };
+            },
+            .copen => {
+                @panic("big todo"); // TODO
+            },
+            else => std.debug.panic("unhandled rtlil rvalue: {}\n", .{peek}),
+        }
+    }
 };
 
 const Token = union(enum) {
@@ -481,6 +535,12 @@ const Token = union(enum) {
             self.offset += 1;
             self.remaining = self.tokens.len - self.offset;
             return token;
+        }
+
+        fn peek(self: *const Iterator) ?Self {
+            if (self.remaining == 0)
+                return null;
+            return self.tokens[self.offset];
         }
 
         fn deinit(self: *Iterator, allocator: Allocator) void {
