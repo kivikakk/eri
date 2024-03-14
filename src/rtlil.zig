@@ -1,8 +1,12 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const rtlil_parser = @import("rtlil_parser.zig");
 const common = @import("common.zig");
-const Parser = @import("rtlil_parser.zig").Parser;
+const rtlil_parser = @import("rtlil_parser.zig");
+const Parser = rtlil_parser.Parser;
+
+test {
+    _ = rtlil_parser;
+}
 
 pub fn output(writer: anytype, what: anytype) !void {
     var w = mkWriter(writer);
@@ -15,8 +19,6 @@ pub fn allocOutput(allocator: Allocator, what: anytype) ![]const u8 {
     try output(out.writer(allocator), what);
     return try out.toOwnedSlice(allocator);
 }
-
-pub const parse = rtlil_parser.parse;
 
 pub const Doc = struct {
     const Self = @This();

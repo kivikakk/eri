@@ -4,8 +4,9 @@
 ** DONE There's a few anyerrors around.
 ** TODO rtlil model feels a bit wonky (esp around Assign/Signal/RValue/Bitvector).
 ** DONE Drop AnyWriter usage.
-** TODO "writeAttributes" based on if the target type has attributes.
-** STRT rtlil parser.
-** TODO rtlil parser string escapes
-** TODO rtlil parser handle cat { ... }
-** TODO "zig build test" should collect all tests!
+** STRT "writeAttributes" based on if the target type has attributes.
+** DONE rtlil parser.
+** DONE rtlil parser string escapes
+** DONE rtlil parser handle cat { ... }
+** DONE "zig build test" should collect all tests!
+** TODO bv -

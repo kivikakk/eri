@@ -5,6 +5,12 @@ const rtlil = @import("./rtlil.zig");
 const ast = @import("./ast.zig");
 const compiler = @import("./compiler.zig");
 
+test {
+    _ = rtlil;
+    _ = ast;
+    _ = compiler;
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc = gpa.allocator();

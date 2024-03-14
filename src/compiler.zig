@@ -3,19 +3,19 @@ const Allocator = std.mem.Allocator;
 const ast = @import("ast.zig");
 const rtlil = @import("rtlil.zig");
 
-    pub fn compileBuffer(allocator: Allocator, input: []const u8) !rtlil.Doc {
-        var compiler = Compiler.mk(allocator);
-        defer compiler.deinit();
+pub fn compileBuffer(allocator: Allocator, input: []const u8) !rtlil.Doc {
+    var compiler = Compiler.mk(allocator);
+    defer compiler.deinit();
 
-        const doc = try ast.parse(allocator, input);
-        defer doc.deinit(allocator);
+    const doc = try ast.parse(allocator, input);
+    defer doc.deinit(allocator);
 
-        for (doc.forms) |form| {
-            try compiler.nomTop(form);
-        }
-
-        return try compiler.finalise();
+    for (doc.forms) |form| {
+        try compiler.nomTop(form);
     }
+
+    return try compiler.finalise();
+}
 
 pub const Compiler = struct {
     const Self = @This();
@@ -107,15 +107,20 @@ pub const Compiler = struct {
         }
 
         var modules = try self.allocator.alloc(rtlil.Module, 1);
-        modules[0] = .{ .name = "uninitialised" };
+        modules[0] = .{ .name = "" };
         errdefer {
             for (modules) |module| module.deinit(self.allocator);
             self.allocator.free(modules);
         }
 
+        const name = try self.allocator.dupe(u8, "top");
+        errdefer self.allocator.free(name);
+
+        const o_wires = try wires.toOwnedSlice(self.allocator);
+
         modules[0] = rtlil.Module{
-            .name = "top",
-            .wires = try wires.toOwnedSlice(self.allocator),
+            .name = name,
+            .wires = o_wires,
         };
 
         return rtlil.Doc.fromModules(modules);
@@ -139,7 +144,7 @@ fn expectCompilesTo(allocator: Allocator, input: []const u8, il: []const u8) !vo
     const doc = try compileBuffer(allocator, input);
     defer doc.deinit(allocator);
 
-    const expIl = try rtlil.parse(rtlil.Doc, allocator, il);
+    const expIl = try rtlil.Doc.parse(allocator, il);
     defer expIl.deinit(allocator);
 
     const output = try rtlil.allocOutput(allocator, doc);
@@ -159,4 +164,3 @@ fn compileTest(allocator: Allocator) !void {
         \\end
     );
 }
-
