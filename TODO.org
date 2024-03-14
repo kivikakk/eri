@@ -3,10 +3,12 @@
 * Minor
 ** DONE There's a few anyerrors around.
 ** TODO rtlil model feels a bit wonky (esp around Assign/Signal/RValue/Bitvector).
+I was thinking of going by https://blog.eowyn.net/yosys/CHAPTER_TextRtlil.html
+but woooow that's inaccurate.
 ** DONE Drop AnyWriter usage.
-** STRT "writeAttributes" based on if the target type has attributes.
+** DONE "writeAttributes" based on if the target type has attributes.
 ** DONE rtlil parser.
 ** DONE rtlil parser string escapes
 ** DONE rtlil parser handle cat { ... }
 ** DONE "zig build test" should collect all tests!
-** TODO bv -
+** DONE bv -

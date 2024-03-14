@@ -575,7 +575,7 @@ const Token = union(enum) {
                     else => return error.Invalid,
                 },
                 .bv => |s| switch (c) {
-                    '0', '1' => {}, // TODO: -, any others?
+                    '0', '1', '-' => {},
                     ' ' => return try Self.mkBv(allocator, buffer[s..i], i),
                     else => return error.Invalid,
                 },
@@ -698,9 +698,14 @@ const Token = union(enum) {
         std.debug.assert(it.next() == null);
         const len = std.fmt.parseInt(usize, len_s, 10) catch return error.Invalid;
         std.debug.assert(bs.len == len);
-        var bits = try allocator.alloc(u1, len);
+        var bits = try allocator.alloc(rtlil.Bitvector.Bit, len);
         for (bs, 0..) |bit, i| {
-            bits[bits.len - i - 1] = if (bit == '1') 1 else 0;
+            bits[bits.len - i - 1] = switch (bit) {
+                '0' => .zero,
+                '1' => .one,
+                '-' => .dont_care,
+                else => unreachable,
+            };
         }
         return .{
             .token = .{ .bv = .{ .bits = bits } },
@@ -752,8 +757,12 @@ test "Token.nextFromBuffer" {
     try expectNextFromBuffer(.{ .string = "xyz" }, "  \"xyz\"", 1);
     try expectNextFromBuffer(.{ .range = .{ .upper = 0, .lower = 0 } }, " [0]", 0);
     try expectNextFromBuffer(.{ .range = .{ .upper = 64, .lower = 48 } }, " [64:48]", 0);
-    try expectNextFromBuffer(.{ .bv = .{ .bits = &.{ 0, 0, 0, 0 } } }, "4'0000", 0);
-    try expectNextFromBuffer(.{ .bv = .{ .bits = &.{ 0, 0, 0, 0, 0, 0, 0, 1 } } }, "8'10000000", 0);
+    try expectNextFromBuffer(.{ .bv = .{ .bits = &[_]rtlil.Bitvector.Bit{.zero} ** 4 } }, "4'0000", 0);
+    try expectNextFromBuffer(
+        .{ .bv = .{ .bits = &[_]rtlil.Bitvector.Bit{.zero} ** 7 ++ &[_]rtlil.Bitvector.Bit{.one} } },
+        "8'10000000",
+        0,
+    );
 }
 
 fn expectAllFromBuffer(
@@ -785,7 +794,7 @@ fn testAllFromBuffer(allocator: Allocator) !void {
     try expectAllFromBuffer(allocator, &.{
         Token{ .bareword = "attribute" },
         Token{ .bareword = "\\init" },
-        Token{ .bv = .{ .bits = &.{ 0, 0 } } },
+        Token{ .bv = .{ .bits = &.{ .zero, .zero } } },
     }, "attribute \\init 2'00");
 
     try expectAllFromBuffer(allocator, error.Invalid, "abc!");

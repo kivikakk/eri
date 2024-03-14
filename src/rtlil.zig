@@ -234,10 +234,17 @@ pub const Signal = struct {
 pub const Bitvector = struct {
     const Self = @This();
 
-    bits: []const u1,
+    pub const Bit = enum(u2) {
+        zero = 0,
+        one = 1,
+        dont_care = 2,
+        _unused = 3,
+    };
+
+    bits: []const Bit,
 
     pub fn dupe(self: Self, allocator: Allocator) Allocator.Error!Self {
-        return .{ .bits = try allocator.dupe(u1, self.bits) };
+        return .{ .bits = try allocator.dupe(Bit, self.bits) };
     }
 
     pub fn deinit(self: Self, allocator: Allocator) void {
@@ -256,7 +263,12 @@ pub const Bitvector = struct {
         try std.fmt.format(writer, "{}'", .{self.bits.len});
         var it = std.mem.reverseIterator(self.bits);
         while (it.next()) |bit| {
-            try writer.writeByte(if (bit == 1) '1' else '0');
+            try writer.writeByte(switch (bit) {
+                .zero => '0',
+                .one => '1',
+                .dont_care => '-',
+                else => unreachable,
+            });
         }
     }
 };
@@ -383,14 +395,15 @@ fn Writer(comptime T: type) type {
         }
 
         fn printObject(self: *Self, what: anytype) T.Error!void {
+            if (@hasField(@TypeOf(what), "attributes"))
+                try self.printAttributes(what);
+
             switch (@TypeOf(what)) {
                 Doc => {
                     for (what.modules) |module|
                         try self.printObject(module);
                 },
                 Module => {
-                    try self.printAttributes(what);
-
                     try self.printLine("module {s}", .{what.name});
                     self.indent += 1;
 
@@ -416,7 +429,6 @@ fn Writer(comptime T: type) type {
                     try self.printLine("attribute {s} {}", .{ what.name, what.value });
                 },
                 Memory => {
-                    try self.printAttributes(what);
                     try self.printLine("memory width {} size {} {s}", .{ what.width, what.size, what.name });
                 },
                 Wire => {
@@ -432,8 +444,6 @@ fn Writer(comptime T: type) type {
                     }
                 },
                 Cell => {
-                    try self.printAttributes(what);
-
                     try self.printLine("cell {s} {s}", .{ what.kind, what.name });
                     self.indent += 1;
 
@@ -453,8 +463,6 @@ fn Writer(comptime T: type) type {
                     try self.printLine("connect {s} {}", .{ what.name, what.target });
                 },
                 Process => {
-                    try self.printAttributes(what);
-
                     try self.printLine("process {s}", .{what.name});
                     self.indent += 1;
 
@@ -502,162 +510,6 @@ fn Writer(comptime T: type) type {
 fn mkWriter(inner: anytype) Writer(@TypeOf(inner)) {
     return Writer(@TypeOf(inner)).mk(inner);
 }
-
-// <<top.il:
-//   attribute \generator "Amaranth"
-//   attribute \top 1
-//   module \top
-//     attribute \src "/Users/blah/xyz.py:123"
-//     memory width 8 size 71 \rom_rd
-//     wire width 1 \clk
-//     wire width 1 \rst
-//     ...
-//     wire width 1 \led_0__o
-//     wire width 1 \button_0__i
-//     ...
-//     wire width 1 inout 0 \led_0__io
-//     ..
-//     wire width 1 inout 2 \button_0__io
-//     ..
-//     wire width 1 inout 17 \clk12_0__io
-//     wire width 1 $1
-//     wire width 1 $2
-//     ...
-//     connect \i2c_bus__busy \led_0__o [0]
-//     connect \button_0__i \i [0]
-//     ...
-//     cell \top.oled \oled
-//       connect \spi_flash_1x_0__clk__o $13 [0]
-//       connect \w_rdy \w_rdy [0]
-//       connect \rst \rst [0]
-//       connect \clk \clk [0]
-//       ...
-//     end
-//     ..
-//     cell \top.cd_sync \cd_sync
-//       connect \rst \rst [0]
-//       connect \clk \clk [0]
-//     end
-//     cell \top.pin_led_0 \pin_led_0
-//       connect \led_0__io \led_0__io [0]
-//       connect \led_0__o \led_0__o [0]
-//     end
-//     ..
-//     cell $and $21
-//       parameter \A_SIGNED 0
-//       parameter \B_SIGNED 0
-//       parameter \A_WIDTH 1
-//       parameter \B_WIDTH 1
-//       parameter \Y_WIDTH 1
-//       connect \A \up [0]
-//       connect \B \w_rdy [0]
-//       connect \Y $1
-//     end
-//     ..
-//     attribute \src "/Users/...:123"
-//     cell $eq $25
-//       parameter \A_SIGNED 0
-//       parameter \B_SIGNED 0
-//       parameter \A_WIDTH 7
-//       parameter \B_WIDTH 7
-//       parameter \Y_WIDTH 1
-//       connect \A \remain [6:0]
-//       connect \B 7'0000001
-//       connect \Y $5
-//     end
-//     ...
-//     process $30
-//       assign $8 [0] \w_en [0]
-//       switch \fsm_state [1:0]
-//         case 2'00
-//           assign $8 [0] 1'0
-//         case 2'01
-//         case 2'10
-//           switch \w_rdy [0]
-//             case 1'1
-//               assign $8 [0] 1'1
-//           end
-//         case 2'11
-//           assign $8 [0] 1'0
-//       end
-//       switch \rst [0]
-//         case 1'1
-//           assign $8 [0] 1'0
-//       end
-//     end
-//     cell $dff $31
-//       parameter \WIDTH 1
-//       parameter \CLK_POLARITY 1
-//       connect \D $8 [0]
-//       connect \CLK \clk [0]
-//       connect \Q \w_en
-//     end
-//     ..
-//     ...
-//       switch { $1 [0] \spifr_bus__valid [0] }
-//         case 2'-1
-//           assign $91 [5:0] 6'000011
-//         case 2'1-
-//           assign $91 [5:0] 6'000100
-//       end
-//     ...
-//       process $322
-//         assign \i2c_bus__in_fifo_w_rdy$125 [0] 1'0
-//         switch { \busy$74 [0] \busy$70 [0] \busy [0] \busy$71 [0] }
-//           case 4'---1
-//           case 4'--1-
-//           case 4'-1--
-//           case 4'1---
-//             assign \i2c_bus__in_fifo_w_rdy$125 [0] \i2c_bus__in_fifo_w_rdy [0]
-//           case          # ? XXX
-//         end
-//     ..
-// cell $meminit_v2 $68
-//   parameter \MEMID "\\storage"
-//   parameter \ABITS 0
-//   parameter \WIDTH 8
-//   parameter \WORDS 31
-//   parameter \PRIORITY 0
-//   connect \ADDR {  }
-//   connect \DATA 248'00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-//   connect \EN 8'11111111
-// end
-// attribute \src "/nix/store/07fwg07nvi4mbbd65793nrqg3az16pdw-python3.11-amaranth-0.4.4dev1+gc40cfc9/lib/python3.11/site-packages/amaranth/lib/memory.py:97"
-// cell $memwr_v2 $69
-//   parameter \MEMID "\\storage"
-//   parameter \ABITS 5
-//   parameter \WIDTH 8
-//   parameter \CLK_ENABLE 1
-//   parameter \CLK_POLARITY 1
-//   parameter \PORTID 0
-//   parameter \PRIORITY_MASK 0
-//   connect \ADDR $signature__addr [4:0]
-//   connect \DATA \w_data [7:0]
-//   connect \EN { $signature__en [0] $signature__en [0] $signature__en [0] $signature__en [0] $signature__en [0] $signature__en [0] $signature__en [0] $signature__en [0] }
-//   connect \CLK \clk [0]
-// end
-// attribute \src "/nix/store/07fwg07nvi4mbbd65793nrqg3az16pdw-python3.11-amaranth-0.4.4dev1+gc40cfc9/lib/python3.11/site-packages/amaranth/lib/memory.py:204"
-// cell $memrd_v2 $70
-//   parameter \MEMID "\\storage"
-//   parameter \ABITS 5
-//   parameter \WIDTH 8
-//   parameter \TRANSPARENCY_MASK 1'0
-//   parameter \COLLISION_X_MASK 1'0
-//   parameter \ARST_VALUE 8'00000000
-//   parameter \SRST_VALUE 8'00000000
-//   parameter \INIT_VALUE 8'00000000
-//   parameter \CE_OVER_SRST 0
-//   parameter \CLK_ENABLE 1
-//   parameter \CLK_POLARITY 1
-//   connect \ADDR $signature__addr$18 [4:0]
-//   connect \DATA \r_data
-//   connect \ARST 1'0
-//   connect \SRST 1'0
-//   connect \EN $signature__en$21 [0]
-//   connect \CLK \clk [0]
-// end
-//   end
-// <<
 
 fn expectOutputAndRoundtrip(allocator: Allocator, arg: Doc, expected: []const u8) !void {
     const out = try allocOutput(allocator, arg);
@@ -729,7 +581,7 @@ fn testModulePrint(allocator: Allocator) !void {
                 .name = "$signature__addr$18",
                 .range = .{ .upper = 4 },
             } } }, .{ .name = "\\ARST", .target = .{ .constant = .{
-                .bits = &.{0},
+                .bits = &.{.zero},
             } } } },
         } },
         .processes = &.{.{
@@ -740,46 +592,41 @@ fn testModulePrint(allocator: Allocator) !void {
             }},
             .switches = &.{ .{
                 .lhs = .{ .name = "\\fsm_state", .range = .{ .upper = 1 } },
-                .cases = &.{
-                    .{
-                        .value = .{ .bits = &.{ 0, 0 } },
-                        .assigns = &.{
-                            .{
-                                .lhs = .{ .name = "$8", .range = .{} },
-                                .rhs = .{ .constant = .{ .bits = &.{0} } },
-                            },
-                        },
-                    },
-                    .{ .value = .{ .bits = &.{ 1, 0 } } },
-                    .{
-                        .value = .{ .bits = &.{ 0, 1 } },
-                        .switches = &.{.{
-                            .lhs = .{ .name = "\\w_rdy", .range = .{} },
-                            .cases = &.{.{
-                                .value = .{ .bits = &.{1} },
-                                .assigns = &.{.{
-                                    .lhs = .{ .name = "$8", .range = .{} },
-                                    .rhs = .{ .constant = .{ .bits = &.{1} } },
-                                }},
-                            }},
-                        }},
-                    },
-                    .{ .value = .{ .bits = &.{ 1, 1 } }, .assigns = &.{
+                .cases = &.{ .{
+                    .value = .{ .bits = &.{ .zero, .zero } },
+                    .assigns = &.{
                         .{
                             .lhs = .{ .name = "$8", .range = .{} },
-                            .rhs = .{ .constant = .{ .bits = &.{0} } },
+                            .rhs = .{ .constant = .{ .bits = &.{.zero} } },
                         },
-                    } },
-                },
+                    },
+                }, .{ .value = .{ .bits = &.{ .one, .zero } } }, .{
+                    .value = .{ .bits = &.{ .zero, .one } },
+                    .switches = &.{.{
+                        .lhs = .{ .name = "\\w_rdy", .range = .{} },
+                        .cases = &.{.{
+                            .value = .{ .bits = &.{.one} },
+                            .assigns = &.{.{
+                                .lhs = .{ .name = "$8", .range = .{} },
+                                .rhs = .{ .constant = .{ .bits = &.{.one} } },
+                            }},
+                        }},
+                    }},
+                }, .{ .value = .{ .bits = &.{ .one, .one } }, .assigns = &.{
+                    .{
+                        .lhs = .{ .name = "$8", .range = .{} },
+                        .rhs = .{ .constant = .{ .bits = &.{.zero} } },
+                    },
+                } }, .{ .value = .{ .bits = &.{ .one, .dont_care } } } },
             }, .{
                 .lhs = .{ .name = "\\rst", .range = .{} },
                 .cases = &.{
                     .{
-                        .value = .{ .bits = &.{1} },
+                        .value = .{ .bits = &.{.one} },
                         .assigns = &.{.{
                             .lhs = .{ .name = "$8", .range = .{} },
                             .rhs = .{ .cat = .{ .values = &.{
-                                .{ .constant = .{ .bits = &.{ 0, 0, 0, 0 } } },
+                                .{ .constant = .{ .bits = &.{ .zero, .zero, .zero, .zero } } },
                                 .{ .signal = .{ .name = "\\read__value", .range = .{ .upper = 15, .lower = 15 } } },
                             } } },
                         }},
@@ -825,6 +672,7 @@ fn testModulePrint(allocator: Allocator) !void {
         \\        end
         \\      case 2'11
         \\        assign $8 [0] 1'0
+        \\      case 2'-1
         \\    end
         \\    switch \rst [0]
         \\      case 1'1
