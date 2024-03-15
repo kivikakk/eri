@@ -246,6 +246,13 @@ pub const Bitvector = struct {
 
     bits: []const Bit,
 
+    pub fn fromU1s(allocator: Allocator, src: []u1) Allocator.Error!Self {
+        var bits = try allocator.alloc(Bit, src.len) ;
+        for (src, 0..) |bit, i|
+            bits[i] = if (bit == 0) .zero else .one;
+        return .{ .bits = bits };
+    }
+
     pub fn dupe(self: Self, allocator: Allocator) Allocator.Error!Self {
         return .{ .bits = try allocator.dupe(Bit, self.bits) };
     }

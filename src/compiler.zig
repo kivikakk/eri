@@ -64,30 +64,17 @@ pub const Compiler = struct {
 
         const width: usize = if (args.len >= 2) @intCast(args[1].value.number) else 1;
 
-        var init = try self.allocator.alloc(u1, width);
-        if (args.len >= 3) {
-            switch (args[2].value) {
-                .number => |number| {
-                    if (number < 0)
-                        std.debug.assert(number >= -std.math.pow(i64, 2, @intCast(width - 1)))
-                    else
-                        std.debug.assert(number < std.math.pow(i64, 2, @intCast(width)));
-                    var p: i64 = 1;
-                    var i: usize = 0;
-                    while (i < width) : (i += 1) {
-                        init[i] = if ((number & p) == p) 1 else 0;
-                        p *= 2;
-                    }
-                },
-                else => return error.Unexpected,
+        const init: ?Register.Init = init: {
+            if (args.len >= 3) {
+                switch (args[2].value) {
+                    .number => |number| break :init .{ .number = @intCast(number) },
+                    else => return error.Unexpected,
+                }
             }
-        }
-
-        return .{
-            .name = name,
-            .width = width,
-            .init = init,
+            break :init null;
         };
+
+        return .{ .name = name, .width = width, .init = init };
     }
 
     fn finalise(self: *Self) !rtlil.Doc {
@@ -99,12 +86,24 @@ pub const Compiler = struct {
         }
 
         for (self.registers.items) |register| {
-            const name = try self.allocator.dupe(u8, register.name);
-            errdefer self.allocator.free(name);
-            try wires.append(self.allocator, .{
-                .width = register.width,
-                .name = name,
-            });
+            {
+                const name = try self.allocator.dupe(u8, register.name);
+                errdefer self.allocator.free(name);
+                try wires.append(self.allocator, .{
+                    .name = name,
+                    .width = register.width,
+                });
+            }
+            if (register.init) |init| {
+                const name = try self.allocator.dupe(u8, register.name);
+                errdefer self.allocator.free(name);
+                const target = try init.rvalue(self.allocator);
+                errdefer target.deinit(self.allocator);
+                try connections.append(self.allocator, .{
+                    .name = name,
+                    .target = target,
+                });
+            }
         }
 
         var modules = try self.allocator.alloc(rtlil.Module, 1);
@@ -129,16 +128,33 @@ pub const Compiler = struct {
     }
 };
 
+// A register is a wire which has an initial value and is updated synchronously.
 const Register = struct {
     const Self = @This();
 
+    const Init = union(enum) {
+        bv: []u1,
+        number: i32,
+
+        fn rvalue(self: Init, allocator: Allocator) Allocator.Error!rtlil.RValue {
+            return switch (self) {
+                .bv => |bv| .{ .bv = try rtlil.Bitvector.fromU1s(allocator, bv) },
+                .number => |number| .{ .number = number },
+            };
+        }
+    };
+
     name: []const u8,
     width: usize,
-    init: []u1,
+    init: ?Init,
 
     pub fn deinit(self: Self, allocator: Allocator) void {
         allocator.free(self.name);
-        allocator.free(self.init);
+        if (self.init) |init|
+            switch (init) {
+                .bv => |bv| allocator.free(bv),
+                else => {},
+            };
     }
 };
 
