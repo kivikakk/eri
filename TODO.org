@@ -1,5 +1,8 @@
 #+title: Todo
 
+* Narrative
+** STRT connect constant inits
+** TODO feed into yosys
 * Minor
 ** DONE There's a few anyerrors around.
 ** TODO rtlil model feels a bit wonky (esp around Assign/Signal/RValue/Bitvector).
@@ -12,3 +15,4 @@ but woooow that's inaccurate.
 ** DONE rtlil parser handle cat { ... }
 ** DONE "zig build test" should collect all tests!
 ** DONE bv -
+** TODO parse rtlil wires to spec (not forced order)

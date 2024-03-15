@@ -184,11 +184,13 @@ pub const RValue = union(enum) {
     const Self = @This();
 
     signal: Signal,
-    constant: Bitvector,
+    bv: Bitvector,
+    number: i32,
     cat: Cat,
 
     pub fn deinit(self: Self, allocator: Allocator) void {
         switch (self) {
+            .number => {},
             inline else => |payload| payload.deinit(allocator),
         }
     }
@@ -200,6 +202,7 @@ pub const RValue = union(enum) {
         writer: anytype,
     ) @TypeOf(writer).Error!void {
         switch (self) {
+            .number => |number| try std.fmt.formatInt(number, 10, .lower, options, writer),
             inline else => |payload| try payload.format(fmt, options, writer),
         }
     }
@@ -580,7 +583,7 @@ fn testModulePrint(allocator: Allocator) !void {
             .connections = &.{ .{ .name = "\\ADDR", .target = .{ .signal = .{
                 .name = "$signature__addr$18",
                 .range = .{ .upper = 4 },
-            } } }, .{ .name = "\\ARST", .target = .{ .constant = .{
+            } } }, .{ .name = "\\ARST", .target = .{ .bv = .{
                 .bits = &.{.zero},
             } } } },
         } },
@@ -597,7 +600,7 @@ fn testModulePrint(allocator: Allocator) !void {
                     .assigns = &.{
                         .{
                             .lhs = .{ .name = "$8", .range = .{} },
-                            .rhs = .{ .constant = .{ .bits = &.{.zero} } },
+                            .rhs = .{ .bv = .{ .bits = &.{.zero} } },
                         },
                     },
                 }, .{ .value = .{ .bits = &.{ .one, .zero } } }, .{
@@ -608,14 +611,14 @@ fn testModulePrint(allocator: Allocator) !void {
                             .value = .{ .bits = &.{.one} },
                             .assigns = &.{.{
                                 .lhs = .{ .name = "$8", .range = .{} },
-                                .rhs = .{ .constant = .{ .bits = &.{.one} } },
+                                .rhs = .{ .bv = .{ .bits = &.{.one} } },
                             }},
                         }},
                     }},
                 }, .{ .value = .{ .bits = &.{ .one, .one } }, .assigns = &.{
                     .{
                         .lhs = .{ .name = "$8", .range = .{} },
-                        .rhs = .{ .constant = .{ .bits = &.{.zero} } },
+                        .rhs = .{ .bv = .{ .bits = &.{.zero} } },
                     },
                 } }, .{ .value = .{ .bits = &.{ .one, .dont_care } } } },
             }, .{
@@ -626,7 +629,7 @@ fn testModulePrint(allocator: Allocator) !void {
                         .assigns = &.{.{
                             .lhs = .{ .name = "$8", .range = .{} },
                             .rhs = .{ .cat = .{ .values = &.{
-                                .{ .constant = .{ .bits = &.{ .zero, .zero, .zero, .zero } } },
+                                .{ .bv = .{ .bits = &.{ .zero, .zero, .zero, .zero } } },
                                 .{ .signal = .{ .name = "\\read__value", .range = .{ .upper = 15, .lower = 15 } } },
                             } } },
                         }},

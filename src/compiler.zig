@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ast = @import("ast.zig");
 const rtlil = @import("rtlil.zig");
+const common = @import("common.zig");
 
 pub fn compileBuffer(allocator: Allocator, input: []const u8) !rtlil.Doc {
     var compiler = Compiler.mk(allocator);
@@ -30,8 +31,7 @@ pub const Compiler = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        for (self.registers.items) |register| register.deinit(self.allocator);
-        self.registers.deinit(self.allocator);
+        common.deinit(self.allocator, &self.registers);
     }
 
     fn nomTop(self: *Self, form: ast.Form) Error!void {
@@ -92,9 +92,10 @@ pub const Compiler = struct {
 
     fn finalise(self: *Self) !rtlil.Doc {
         var wires = std.ArrayListUnmanaged(rtlil.Wire){};
+        var connections = std.ArrayListUnmanaged(rtlil.Connection){};
         errdefer {
-            for (wires.items) |wire| wire.deinit(self.allocator);
-            wires.deinit(self.allocator);
+            common.deinit(self.allocator, &wires);
+            common.deinit(self.allocator, &connections);
         }
 
         for (self.registers.items) |register| {
@@ -108,19 +109,20 @@ pub const Compiler = struct {
 
         var modules = try self.allocator.alloc(rtlil.Module, 1);
         modules[0] = .{ .name = "" };
-        errdefer {
-            for (modules) |module| module.deinit(self.allocator);
-            self.allocator.free(modules);
-        }
+        errdefer common.deinit(self.allocator, modules);
 
-        const name = try self.allocator.dupe(u8, "top");
+        const name = try self.allocator.dupe(u8, "\\top");
         errdefer self.allocator.free(name);
 
         const o_wires = try wires.toOwnedSlice(self.allocator);
+        errdefer common.deinit(self.allocator, o_wires);
+
+        const o_connections = try connections.toOwnedSlice(self.allocator);
 
         modules[0] = rtlil.Module{
             .name = name,
             .wires = o_wires,
+            .connections = o_connections,
         };
 
         return rtlil.Doc.fromModules(modules);
@@ -134,7 +136,7 @@ const Register = struct {
     width: usize,
     init: []u1,
 
-    fn deinit(self: Self, allocator: Allocator) void {
+    pub fn deinit(self: Self, allocator: Allocator) void {
         allocator.free(self.name);
         allocator.free(self.init);
     }
@@ -159,7 +161,16 @@ test "compile - CAAF" {
 
 fn compileTest(allocator: Allocator) !void {
     try expectCompilesTo(allocator, "(reg x 8 -2)",
-        \\module top
+        \\module \top
+        \\  wire width 8 \x
+        \\  connect \x -2
+        \\end
+    );
+
+    try expectCompilesTo(allocator,
+        \\(reg x 8)
+    ,
+        \\module \top
         \\  wire width 8 \x
         \\end
     );

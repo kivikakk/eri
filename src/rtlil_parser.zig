@@ -462,7 +462,17 @@ const Line = union(enum) {
             .bareword => return .{ .signal = try Self.parseSignal(allocator, tokens) },
             .bv => |bv| {
                 _ = tokens.next();
-                return .{ .constant = try bv.dupe(allocator) };
+                return .{ .bv = try bv.dupe(allocator) };
+            },
+            .number => |number| {
+                _ = tokens.next();
+                // No idea if this is still true, but:
+                // https://blog.eowyn.net/yosys/CHAPTER_TextRtlil.html#signal-specifications
+                // "Warning: When an integer constant is a sigspec, it is always
+                // 32 bits wide, 2’s complement. For example, a constant of -1
+                // is the same as 32’11111111111111111111111111111111, while a
+                // constant of 1 is the same as 32’1."
+                return .{ .number = @intCast(number) };
             },
             .copen => {
                 // it's rvalues all the way down, deary

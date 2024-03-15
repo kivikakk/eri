@@ -143,10 +143,7 @@ pub const Form = struct {
         } = .initial;
         errdefer {
             switch (state) {
-                .list => |*list_state| {
-                    for (list_state.forms.items) |form| form.deinit(allocator);
-                    list_state.forms.deinit(allocator);
-                },
+                .list => |*list_state| common.deinit(allocator, &list_state.forms),
                 else => {},
             }
         }
@@ -193,10 +190,7 @@ pub const Form = struct {
         var offset: usize = 0;
 
         var forms = std.ArrayListUnmanaged(Self){};
-        errdefer {
-            for (forms.items) |form| form.deinit(allocator);
-            forms.deinit(allocator);
-        }
+        errdefer common.deinit(allocator, &forms);
 
         while (offset < tokens.len) {
             const next_result = try Self.nextFromTokens(allocator, tokens[offset..]);
