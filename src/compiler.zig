@@ -48,7 +48,11 @@ pub const Compiler = struct {
                     const reg = try self.nomReg(els[1..]);
                     errdefer reg.deinit(self.allocator);
                     try self.registers.append(self.allocator, reg);
-                } else if (std.mem.eql(u8, label, "sync")) {} else if (std.mem.eql(u8, label, "connect")) {} else {
+                } else if (std.mem.eql(u8, label, "sync")) {
+                    // TODO
+                } else if (std.mem.eql(u8, label, "connect")) {
+                    // TODO
+                } else {
                     return error.Unexpected;
                 }
             },
@@ -210,17 +214,17 @@ fn compileTest(allocator: Allocator) !void {
         \\    connect \CLK \clk
         \\    connect \Q \x
         \\  end
-        \\  cell $add $3
+        \\  cell $add $4
         \\    parameter \A_SIGNED 0
         \\    parameter \B_SIGNED 0
         \\    parameter \A_WIDTH 8
         \\    parameter \B_WIDTH 8
         \\    parameter \Y_WIDTH 8
         \\    connect \A \x
-        \\    connect \B 1
+        \\    connect \B 8'00000001
         \\    connect \Y $2
         \\  end
-        \\  process $4
+        \\  process $5
         \\    assign $1 $2
         \\    switch \rst
         \\      case 1'1
