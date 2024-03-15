@@ -176,7 +176,17 @@ test "compile - CAAF" {
 }
 
 fn compileTest(allocator: Allocator) !void {
-    try expectCompilesTo(allocator, "(reg x 8 -2)",
+    try expectCompilesTo(allocator,
+        \\(reg x 8)
+    ,
+        \\module \top
+        \\  wire width 8 \x
+        \\end
+    );
+
+    try expectCompilesTo(allocator,
+        \\(reg x 8 -2)
+    ,
         \\module \top
         \\  wire width 8 \x
         \\  connect \x -2
@@ -185,9 +195,38 @@ fn compileTest(allocator: Allocator) !void {
 
     try expectCompilesTo(allocator,
         \\(reg x 8)
+        \\(sync (set x (add x 1)))
     ,
         \\module \top
+        \\  wire width 1 \clk
+        \\  wire width 1 \rst
         \\  wire width 8 \x
+        \\  wire width 8 $1
+        \\  wire width 8 $2
+        \\  cell $dff $3
+        \\    parameter \WIDTH 8
+        \\    parameter \CLK_POLARITY 1
+        \\    connect \D $1
+        \\    connect \CLK \clk
+        \\    connect \Q \x
+        \\  end
+        \\  cell $add $3
+        \\    parameter \A_SIGNED 0
+        \\    parameter \B_SIGNED 0
+        \\    parameter \A_WIDTH 8
+        \\    parameter \B_WIDTH 8
+        \\    parameter \Y_WIDTH 8
+        \\    connect \A \x
+        \\    connect \B 1
+        \\    connect \Y $2
+        \\  end
+        \\  process $4
+        \\    assign $1 $2
+        \\    switch \rst
+        \\      case 1'1
+        \\        assign $1 0
+        \\    end
+        \\  end
         \\end
     );
 }
