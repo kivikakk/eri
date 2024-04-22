@@ -2,28 +2,67 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const rtlil = @import("./rtlil.zig");
-const ast = @import("./ast.zig");
-const compiler = @import("./compiler.zig");
+const hdl = @import("./hdl.zig");
+const common = @import("common.zig");
 
 test {
     _ = rtlil;
-    _ = ast;
-    _ = compiler;
+    _ = hdl;
+    _ = common;
 }
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const alloc = gpa.allocator();
-
     defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
 
-    const input = try std.io.getStdIn().readToEndAlloc(alloc, 1048576);
-    defer alloc.free(input);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    hdl.arena = arena.allocator();
 
-    const il = try compiler.compileBuffer(alloc, input);
-    defer il.deinit(alloc);
+    var module = hdl.Module.make("top");
+    const led0 = hdl.Resource.find("led0");
+    const counter = hdl.Signal.make("counter", 16);
+    module.comb(.{
+        led0.o.eq(counter.expr().bit(-1)),
+    });
+    module.sync(.{
+        counter.eq(counter.expr().add(1)),
+    });
 
-    try rtlil.output(std.io.getStdOut().writer(), il);
+    module.dump();
+
+    // var il = il: {
+    //     var wires = std.ArrayListUnmanaged(rtlil.Wire){};
+    //     var connections = std.ArrayListUnmanaged(rtlil.Connection){};
+    //     errdefer {
+    //         common.deinit(allocator, &wires);
+    //         common.deinit(allocator, &connections);
+    //     }
+
+    //     var modules = try allocator.alloc(rtlil.Module, 1);
+    //     modules[0] = .{ .name = "" };
+    //     errdefer common.deinit(allocator, modules);
+
+    //     const name = try allocator.dupe(u8, "\\top");
+    //     errdefer allocator.free(name);
+
+    //     const o_wires = try wires.toOwnedSlice(allocator);
+    //     errdefer common.deinit(allocator, o_wires);
+
+    //     const o_connections = try connections.toOwnedSlice(allocator);
+
+    //     modules[0] = rtlil.Module{
+    //         .name = name,
+    //         .wires = o_wires,
+    //         .connections = o_connections,
+    //     };
+
+    //     break :il rtlil.Doc.fromModules(modules);
+    // };
+    // defer il.deinit(allocator);
+
+    // try rtlil.output(std.io.getStdOut().writer(), il);
 }
 
 // Gourd zero for synthesis:
