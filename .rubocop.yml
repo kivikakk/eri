@@ -16,5 +16,17 @@ Style/VariableInterpolation:
 Style/Semicolon:
   Enabled: false
 
+Style/RegexpLiteral:
+  Enabled: false
+
+Style/PerlBackrefs:
+  Enabled: false
+
+Lint/RescueException:
+  Enabled: false
+
 Naming/MethodParameterName:
+  Enabled: false
+
+Metrics/MethodLength:
   Enabled: false

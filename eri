@@ -9,7 +9,7 @@ require_relative 'lib/hdl_expr'
 
 m = HDL::Module.new('top')
 led0 = HDL::Resource.find('led0')
-counter = HDL::Signal.new('counter', 16)
+counter = HDL::Signal.new(16, reset: -2)
 m.comb << led0.o.eq(counter[-1])
 m.sync << counter.eq(counter + 1)
 m.dump

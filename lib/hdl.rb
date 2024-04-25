@@ -44,7 +44,7 @@ module HDL
 
     def initialize(name)
       @name = name
-      @o = HDL::Signal.new("#@name.o", 1)
+      @o = HDL::Signal.new(1, name: "#@name.o")
     end
 
     attr_reader :o
