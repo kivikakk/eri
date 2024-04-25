@@ -1,0 +1,10 @@
+{
+    "rubyLsp.rubyVersionManager": {
+        "identifier": "custom",
+    },
+    "rubyLsp.customRubyCommand": "PATH=/nix/store/s9w9xly88c3n3a8y5lnxyi49yw7kqjys-ruby-3.3.0-preview3/bin:$(getconf PATH)",
+    "rubyLsp.bundleGemfile": "./Gemfile",
+    "[ruby]": {
+        "editor.indentSize": 2,
+    }
+}

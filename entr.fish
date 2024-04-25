@@ -1,5 +1,8 @@
 #!/usr/bin/env fish
 
-while sleep 1
-    find . -name \*.zig | grep -v zig-cache | /opt/homebrew/bin/entr -cd zig build run
+while sleep 0.5
+    begin
+        echo eri
+        find lib -name \*.rb
+    end | /opt/homebrew/bin/entr -cd ./eri
 end

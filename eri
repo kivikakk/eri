@@ -1,0 +1,15 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require_relative 'lib/hdl'
+require_relative 'lib/hdl_value'
+require_relative 'lib/hdl_signal'
+require_relative 'lib/hdl_stmt'
+require_relative 'lib/hdl_expr'
+
+m = HDL::Module.new('top')
+led0 = HDL::Resource.find('led0')
+counter = HDL::Signal.new('counter', 16)
+m.comb << led0.o.eq(counter[-1])
+m.sync << counter.eq(counter + 1)
+m.dump
