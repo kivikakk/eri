@@ -23,20 +23,49 @@ module RTLIL
     end
   end
 
-  class Module
-    def initialize(name, elements, attributes)
+  class Parameter
+    def initialize(name, value)
       @name = name
+      @value = value
+    end
+
+    def format(io:, indent: 0)
+      RTLIL.indent(io, indent)
+      io.puts "parameter #@name #{@value.inspect}"
+    end
+  end
+
+  class Container
+    def initialize(type, elements, attributes)
+      @type = type
       @elements = elements
       @attributes = attributes
     end
 
-    def format(io:)
-      RTLIL.attributes(io, 0, @attributes)
-      io.puts "module #@name"
+    def format_open(io:)
+      raise NotImplementedError
+    end
+
+    def format(io:, indent: 0)
+      RTLIL.attributes(io, indent, @attributes)
+      RTLIL.indent(io, indent)
+      format_open(io:)
       @elements.each do |element|
-        element.format(io:, indent: 1)
+        element.format(io:, indent: indent + 1)
       end
+      RTLIL.indent(io, indent)
       io.puts 'end'
+    end
+  end
+
+  class Module < Container
+    def initialize(name, *args)
+      super('module', *args)
+      @name = name
+    end
+
+    def format_open(io:)
+      io.puts "module #@name"
     end
   end
 
@@ -90,14 +119,44 @@ module RTLIL
     end
   end
 
-  class RValue
-    def initialize(name, index)
-      @name = name
-      @index = index
+  module RValue
+    class Wire
+      def initialize(name, index, upper)
+        @name = name
+        @index = index
+        @upper = upper
+      end
+
+      def format(io:)
+        io.print @name.to_s
+        if @index
+          io.print ' ['
+          io.print "#@upper:" if @upper
+          io.print "#@index]"
+        end
+      end
     end
 
-    def format(io:)
-      io.print "#@name [#@index]"
+    class Bitvector
+      def initialize(bits)
+        @bits = bits
+      end
+
+      def format(io:)
+        io.print "#{@bits.count}'#{@bits.join}"
+      end
+    end
+  end
+
+  class Cell < Container
+    def initialize(kind, name, *args)
+      super('cell', *args)
+      @kind = kind
+      @name = name
+    end
+
+    def format_open(io:)
+      io.puts "cell #@kind #@name"
     end
   end
 end

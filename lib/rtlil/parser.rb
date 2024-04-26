@@ -6,18 +6,36 @@ module RTLIL
   class Parser < Parslet::Parser
     rule(:space) { str(' ') }
     rule(:nl) { str("\n") }
-    rule(:word) { match['$\\\\'].maybe >> match['a-zA-Z0-9_'].repeat(1) }
+    rule(:word) { match['$\\\\'] >> match['$\\\\a-zA-Z0-9_'].repeat(1) }
 
     rule(:number) { match['0-9'].repeat(1).as(:number) }
     rule(:string) { str('"') >> match('[^"]').repeat.as(:string_body) >> str('"') }
     rule(:value) { number | string }
 
+    rule(:rvalue_wire) do
+      word.as(:name) >>
+        begin
+          space >> str('[') >>
+          (match['0-9'].repeat(1).as(:upper) >> str(':')).maybe >>
+          match['0-9'].repeat(1).as(:index) >>
+          str(']')
+        end.maybe
+    end
+    rule(:rvalue_bv) do
+      match['0-9'].repeat(1).as(:size) >> str("'") >> match['01'].repeat(1).as(:bits)
+    end
     rule(:rvalue) do
-      word.as(:name) >> space >> str('[') >> match['0-9'].repeat(1).as(:index) >> str(']')
+      rvalue_wire.as(:wire) |
+        rvalue_bv.as(:bv)
     end
 
     rule(:attribute) do
       space.repeat >> str('attribute') >> space >>
+        word.as(:name) >> space >>
+        value.as(:value) >> nl
+    end
+    rule(:parameter) do
+      space.repeat >> str('parameter') >> space >>
         word.as(:name) >> space >>
         value.as(:value) >> nl
     end
@@ -42,12 +60,24 @@ module RTLIL
         rvalue.as(:rvalue) >> nl
     end
 
+    rule(:cell_start) do
+      space.repeat >> str('cell') >> space >>
+        word.as(:kind) >> space >> word.as(:name) >> nl
+    end
+    rule(:cell_entry) do
+      parameter.as(:parameter) |
+        connect.as(:connect)
+    end
+
+    rule(:cell) { cell_start >> cell_entry.repeat >> space.repeat >> str('end') >> nl }
+
     rule(:mod_start) { str('module') >> space >> word.as(:name) >> nl }
     rule(:mod_entry) do
       attribute.as(:attribute) |
         memory.as(:memory) |
         wire.as(:wire) |
-        connect.as(:connect)
+        connect.as(:connect) |
+        cell.as(:cell)
     end
     rule(:mod) { mod_start >> mod_entry.repeat >> str('end') >> nl }
 
@@ -63,7 +93,7 @@ module RTLIL
       elsif (string_body = data[:string_body])
         assert.nil? || assert == :string or
           raise "asserted #{assert.inspect}: #{data.inspect}"
-        string_body.to_s
+        string_body.to_s.gsub(%r{\\(.)}, '\1')
       else
         raise "unknown value: #{data.inspect}"
       end
@@ -99,6 +129,11 @@ module RTLIL
     new(name, RTLIL::Parser.value(value))
   end
 
+  def Parameter.from(data)
+    data => {name:, value:}
+    new(name, RTLIL::Parser.value(value))
+  end
+
   def Module.from(data, attributes)
     data => [{name:}, *rest]
     attrs = []
@@ -113,6 +148,8 @@ module RTLIL
         elements << RTLIL::Wire.from(data, attrs.slice!(..-1))
       elsif (data = token[:connect])
         elements << RTLIL::Connect.from(data, attrs.slice!(..-1))
+      elsif (data = token[:cell])
+        elements << RTLIL::Cell.from(data, attrs.slice!(..-1))
       else
         raise "unknown module-level token: #{token.inspect}"
       end
@@ -145,7 +182,39 @@ module RTLIL
   end
 
   def RValue.from(data)
-    data => {name:, index:}
-    new(name, index.to_i)
+    case data
+    in wire: {name:}
+      index = data[:wire][:index]&.to_i
+      upper = data[:wire][:upper]&.to_i
+      RValue::Wire.new(name, index, upper)
+    in bv: {size:, bits:}
+      bits.length == size.to_i or
+        raise "bitvector bits don't match defined size"
+      RValue::Bitvector.new(bits.to_s.chars.map(&:to_i))
+    end
+  end
+
+  def Cell.from(data, attributes)
+    data => [{kind:, name:}, *rest]
+    attrs = []
+    elements = []
+
+    rest.each do |token|
+      if (data = token[:attribute])
+        attrs << RTLIL::Attribute.from(data)
+      elsif (data = token[:parameter])
+        raise 'unexpected attribute for parameter in cell' if attrs.any?
+
+        elements << RTLIL::Parameter.from(data)
+      elsif (data = token[:connect])
+        elements << RTLIL::Connect.from(data, attrs.slice!(..-1))
+      else
+        raise "unknown cell-level token: #{token.inspect}"
+      end
+    end
+
+    raise 'leftover attributes in cell' if attrs.any?
+
+    new(kind, name, elements, attributes)
   end
 end
