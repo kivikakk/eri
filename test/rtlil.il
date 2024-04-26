@@ -23,5 +23,23 @@ module \top
   end
   process $30
     assign $8 [0] \w_en [0]
+    switch \fsm_state [1:0]
+      case 2'00
+        assign $8 [0] 1'0
+      case 2'01
+      case 2'10
+        switch \w_rdy [0]
+          case 1'1
+            assign $8 [0] 1'1
+        end
+      case 2'11
+        assign $8 [0] 1'0
+      case 2'-1
+    end
+    switch \rst [0]
+      case 1'1
+        assign $8 [0] { 4'0000 \read__value [15] }
+      case
+    end
   end
 end
