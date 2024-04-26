@@ -21,4 +21,7 @@ module \top
     connect \ADDR $signature__addr$18 [4:0]
     connect \ARST 1'0
   end
+  process $30
+    assign $8 [0] \w_en [0]
+  end
 end

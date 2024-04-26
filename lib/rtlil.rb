@@ -159,6 +159,33 @@ module RTLIL
       io.puts "cell #@kind #@name"
     end
   end
+
+  class Process < Container
+    def initialize(name, *args)
+      super('process', *args)
+      @name = name
+    end
+
+    def format_open(io:)
+      io.puts "process #@name"
+    end
+  end
+
+  class Assign
+    def initialize(signal, rvalue)
+      @signal = signal
+      @rvalue = rvalue
+    end
+
+    def format(io:, indent:)
+      RTLIL.indent(io, indent)
+      io.print 'assign '
+      @signal.format(io:)
+      io.print ' '
+      @rvalue.format(io:)
+      io.puts
+    end
+  end
 end
 
 require_relative 'rtlil/parser'

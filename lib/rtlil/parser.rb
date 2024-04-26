@@ -68,8 +68,27 @@ module RTLIL
       parameter.as(:parameter) |
         connect.as(:connect)
     end
+    rule(:cell) do
+      cell_start >>
+        cell_entry.repeat >>
+        space.repeat >> str('end') >> nl
+    end
 
-    rule(:cell) { cell_start >> cell_entry.repeat >> space.repeat >> str('end') >> nl }
+    rule(:assign) do
+      space.repeat >> str('assign') >> space >>
+        rvalue_wire.as(:signal) >> space >>
+        rvalue.as(:rvalue) >> nl
+    end
+
+    rule(:process_start) { space.repeat >> str('process') >> space >> word.as(:name) >> nl }
+    rule(:process_entry) do
+      assign.as(:assign)
+    end
+    rule(:process) do
+      process_start >>
+        process_entry.repeat >>
+        space.repeat >> str('end') >> nl
+    end
 
     rule(:mod_start) { str('module') >> space >> word.as(:name) >> nl }
     rule(:mod_entry) do
@@ -77,7 +96,8 @@ module RTLIL
         memory.as(:memory) |
         wire.as(:wire) |
         connect.as(:connect) |
-        cell.as(:cell)
+        cell.as(:cell) |
+        process.as(:process)
     end
     rule(:mod) { mod_start >> mod_entry.repeat >> str('end') >> nl }
 
@@ -150,6 +170,8 @@ module RTLIL
         elements << RTLIL::Connect.from(data, attrs.slice!(..-1))
       elsif (data = token[:cell])
         elements << RTLIL::Cell.from(data, attrs.slice!(..-1))
+      elsif (data = token[:process])
+        elements << RTLIL::Process.from(data, attrs.slice!(..-1))
       else
         raise "unknown module-level token: #{token.inspect}"
       end
@@ -216,5 +238,32 @@ module RTLIL
     raise 'leftover attributes in cell' if attrs.any?
 
     new(kind, name, elements, attributes)
+  end
+
+  def Process.from(data, attributes)
+    data => [{name:}, *rest]
+    attrs = []
+    elements = []
+
+    rest.each do |token|
+      if (data = token[:assign])
+        elements << RTLIL::Assign.from(data)
+      else
+        raise "unknown process-level token: #{token.inspect}"
+      end
+    end
+
+    raise 'leftover attributes in process' if attrs.any?
+
+    new(name, elements, attributes)
+  end
+
+  def Assign.from(data)
+    data => {signal:, rvalue:}
+    signal => {name:}
+    index = signal[:index]&.to_i
+    upper = signal[:upper]&.to_i
+
+    new(RValue::Wire.new(name, index, upper), RValue.from(rvalue))
   end
 end
