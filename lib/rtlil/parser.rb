@@ -22,11 +22,20 @@ module RTLIL
         end.maybe
     end
     rule(:rvalue_bv) do
-      match['0-9'].repeat(1).as(:size) >> str("'") >> match['01'].repeat(1).as(:bits)
+      match['0-9'].repeat(1).as(:size) >> str("'") >> match['01-'].repeat(1).as(:bits)
+    end
+    rule(:rvalue_cat) do
+      str('{') >> space >>
+        begin
+          (rvalue_wire.as(:wire) | rvalue_bv.as(:bv)) >>
+          space
+        end.repeat >>
+        str('}')
     end
     rule(:rvalue) do
       rvalue_wire.as(:wire) |
-        rvalue_bv.as(:bv)
+        rvalue_bv.as(:bv) |
+        rvalue_cat.as(:cat)
     end
 
     rule(:attribute) do
@@ -80,9 +89,31 @@ module RTLIL
         rvalue.as(:rvalue) >> nl
     end
 
+    rule(:case_) do
+      space.repeat >> str('case') >>
+        (space >> rvalue_bv.as(:bv)).maybe >>
+        nl
+    end
+
+    rule(:switch_start) do
+      space.repeat >> str('switch') >> space >>
+        rvalue_wire.as(:signal) >> nl
+    end
+    rule(:switch_entry) do
+      case_.as(:case) |
+        assign.as(:assign) |
+        switch.as(:switch)
+    end
+    rule(:switch) do
+      switch_start >>
+        switch_entry.repeat >>
+        space.repeat >> str('end') >> nl
+    end
+
     rule(:process_start) { space.repeat >> str('process') >> space >> word.as(:name) >> nl }
     rule(:process_entry) do
-      assign.as(:assign)
+      assign.as(:assign) |
+        switch.as(:switch)
     end
     rule(:process) do
       process_start >>
