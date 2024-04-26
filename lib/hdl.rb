@@ -50,3 +50,8 @@ module HDL
     attr_reader :o
   end
 end
+
+require_relative 'hdl/value'
+require_relative 'hdl/signal'
+require_relative 'hdl/stmt'
+require_relative 'hdl/expr'

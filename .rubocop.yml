@@ -22,6 +22,9 @@ Style/RegexpLiteral:
 Style/PerlBackrefs:
   Enabled: false
 
+Style/TrailingCommaInArguments:
+  Enabled: false
+
 Lint/RescueException:
   Enabled: false
 

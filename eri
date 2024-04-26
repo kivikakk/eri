@@ -2,10 +2,7 @@
 # frozen_string_literal: true
 
 require_relative 'lib/hdl'
-require_relative 'lib/hdl_value'
-require_relative 'lib/hdl_signal'
-require_relative 'lib/hdl_stmt'
-require_relative 'lib/hdl_expr'
+require_relative 'lib/rtlil'
 
 m = HDL::Module.new('top')
 led0 = HDL::Resource.find('led0')

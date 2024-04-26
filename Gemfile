@@ -2,5 +2,10 @@
 
 source 'https://rubygems.org'
 
+gem 'parslet'
+
+gem 'minitest'
+gem 'rake'
+
 gem 'rubocop'
 gem 'ruby-lsp'
