@@ -1,5 +1,0 @@
-; iCEBreaker: 12MHz.
-
-(reg x 16 -2)
-(sync (set x (add x 1)))
-(connect (index x -1) led0)

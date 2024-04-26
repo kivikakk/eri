@@ -28,5 +28,5 @@ Lint/RescueException:
 Naming/MethodParameterName:
   Enabled: false
 
-Metrics/MethodLength:
+Metrics:
   Enabled: false
