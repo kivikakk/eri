@@ -4,9 +4,21 @@
 require_relative 'lib/hdl'
 require_relative 'lib/rtlil'
 
-m = HDL::Module.new('top')
-led0 = HDL::Resource.find('led0')
-counter = HDL::Signal.new(16, reset: -2)
-m.comb << led0.o.eq(counter[-1])
-m.sync << counter.eq(counter + 1)
-m.dump
+Top = HDL.module do
+  x = io(:out)
+  y = io(:out)
+
+  counter = reg(16, reset: -2)
+  counter =~ counter + 1
+
+  x =~ counter[-1]
+
+  y_reg = reg
+  iff(counter.zero?) { y_reg =~ !y_reg }
+  y =~ y_reg
+end
+
+Top.dump
+puts
+
+Top.dump_rtlil

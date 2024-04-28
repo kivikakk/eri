@@ -5,12 +5,28 @@ module HDL
     include HDL::Value
   end
 
+  class Unop < HDL::Expr
+    def initialize(kind, operand)
+      super()
+
+      %i[!].include?(kind) or
+        raise "Unop kind #{kind} isn't :!"
+      @kind = kind
+      @operand = HDL::Value.from(operand) or
+        raise "Unop operand #{operand} not Value"
+    end
+
+    def to_s
+      "(#@kind #@operand)"
+    end
+  end
+
   class Binop < HDL::Expr
     def initialize(kind, lhs, rhs)
       super()
 
-      kind == :+ or
-        raise "Binop kind #{kind} isn't :+"
+      %i[+ ==].include?(kind) or
+        raise "Binop kind #{kind} isn't :+ or :=="
       @kind = kind
       @lhs = HDL::Value.from(lhs) or
         raise "Binop lhs #{lhs} not Value"
@@ -19,7 +35,7 @@ module HDL
     end
 
     def to_s
-      "(#@lhs + #@rhs)"
+      "(#@lhs #@kind #@rhs)"
     end
   end
 

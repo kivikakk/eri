@@ -11,6 +11,10 @@ module RTLIL
     attributes.each { |attr| attr.format(io:, indent:) }
   end
 
+  def self.name(name)
+    "\\#{name[0].downcase}#{name[1..].gsub(/A-Z/) { "_#{$_.downcase}" }}"
+  end
+
   class Attribute
     def initialize(name, value)
       @name = name
@@ -36,11 +40,27 @@ module RTLIL
   end
 
   class Container
+    class Builder
+      def initialize(container)
+        @container = container
+      end
+
+      %w[Wire Cell Parameter Connect].each do |kind|
+        define_method(kind.downcase) do |*args|
+          elem = RTLIL.const_get(kind).new(*args)
+          @container.elements << elem
+          elem
+        end
+      end
+    end
+
     def initialize(type, elements, attributes)
       @type = type
       @elements = elements
       @attributes = attributes
     end
+
+    attr_reader :elements
 
     def format_open(io:)
       raise NotImplementedError
@@ -55,6 +75,10 @@ module RTLIL
       end
       RTLIL.indent(io, indent)
       io.puts 'end'
+    end
+
+    def build!
+      @build ||= Builder.new(self)
     end
   end
 
@@ -94,6 +118,8 @@ module RTLIL
       @attributes = attributes
     end
 
+    attr_reader :name
+
     def format(io:, indent:)
       RTLIL.attributes(io, indent, @attributes)
       RTLIL.indent(io, indent)
@@ -121,17 +147,17 @@ module RTLIL
 
   module RValue
     class Wire
-      def initialize(name, index, upper)
+      def initialize(name, index = nil, upper = nil)
         @name = name
         @index = index
-        @upper = upper
+        @upper = upper || index
       end
 
       def format(io:)
         io.print @name.to_s
         if @index
           io.print ' ['
-          io.print "#@upper:" if @upper
+          io.print "#@upper:" if @upper != @index
           io.print "#@index]"
         end
       end

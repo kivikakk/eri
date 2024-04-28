@@ -13,6 +13,9 @@ Style/GuardClause:
 Style/VariableInterpolation:
   Enabled: false
 
+Style/SpecialGlobalVars:
+  Enabled: false
+
 Style/Semicolon:
   Enabled: false
 
@@ -23,6 +26,9 @@ Style/PerlBackrefs:
   Enabled: false
 
 Style/TrailingCommaInArguments:
+  Enabled: false
+
+Style/NegatedIf:
   Enabled: false
 
 Lint/RescueException:

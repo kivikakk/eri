@@ -13,6 +13,14 @@ module HDL
       end
     end
 
+    def zero?
+      self == 0 # rubocop:disable Style/NumericPredicate
+    end
+
+    def ==(other)
+      HDL::Binop.new(:==, self, other)
+    end
+
     def +(other)
       HDL::Binop.new(:+, self, other)
     end
